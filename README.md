@@ -1,6 +1,6 @@
 # WinToastRelay
 
-WinToastRelay is a native Windows 10/11 app that relays Windows toast notifications to a webhook in real time.
+WinToastRelay is a native Windows 10/11 app that relays Windows toast notifications to a configured destination in real time.
 
 <a href="https://apps.microsoft.com/detail/9MV8SL6JLV2D">
   <img
@@ -24,9 +24,10 @@ WinToastRelay uses `Windows.UI.Notifications.Management.UserNotificationListener
 
 * WinUI 3 / Windows App SDK visual language with Mica and native Windows controls.
 * Chinese and English UI, switchable from Settings.
-* Bark delivery is the default: `/device-key/title/body?parameters`, with configurable templates and arbitrary Bark parameters.
+* Bark delivery is the default, using JSON POST with configurable templates and arbitrary Bark parameters.
+* WxPusher standard push supports UID and Topic recipients with configurable summary and content templates.
 * HTTPS JSON webhook delivery remains available with an optional Bearer token (loopback HTTP is allowed for local development).
-* Bearer token stored in Windows Credential Manager, not in the JSON settings file.
+* WxPusher AppToken and webhook Bearer token stored in Windows Credential Manager, not in the JSON settings file.
 * Application allow-list filtering.
 * Delivery activity history with status and HTTP response details.
 * Durable local delivery queue with exponential backoff for transient HTTP failures.
@@ -41,7 +42,7 @@ WinToastRelay uses `Windows.UI.Notifications.Management.UserNotificationListener
 Requirements:
 
 * Windows 10 1809 or later (Windows 11 recommended).
-* .NET 9 SDK.
+* .NET 9 SDK (`global.json` pins SDK 9.0.205).
 * A Windows App SDK-compatible development environment.
 
 ```powershell
@@ -80,19 +81,29 @@ For local sideloading, run the generated `Add-AppDevPackage.ps1` from the packag
 
 Use the `.msix` and `.cer` from the same output directory. If Windows reports `0x800B0109` or `0x87e80034` during local sideloading, import the matching `.cer` into **Local Computer → Trusted People**, then install the corresponding `.msix`.
 
-## Webhook payload
-
 ## Delivery modes
 
 ### Bark (default)
 
-Enter a Bark server URL and device key. WinToastRelay sends requests using the standard Bark URL format:
+Enter a Bark server URL and device key. WinToastRelay sends a JSON POST request to the server's `/push` endpoint:
 
-```text
-https://api.day.app/{device-key}/{title}/{body}?sound=bell&group=work
+```json
+{
+  "device_key": "your-device-key",
+  "title": "Example app: A title",
+  "body": "Notification body",
+  "sound": "bell",
+  "group": "work"
+}
 ```
 
-Title and body templates support `{app}`, `{title}`, `{body}`, `{id}`, `{eventType}`, and `{createdAt}`. You can add arbitrary Bark query parameters in the app settings, one `key=value` entry per line.
+Title and body templates support `{app}`, `{title}`, `{body}`, `{id}`, `{eventType}`, and `{createdAt}`. You can add arbitrary Bark parameters in the app settings, one `key=value` entry per line. Oversized payload text is truncated before delivery to stay within the configured payload limit.
+
+### WxPusher
+
+Create an application in the WxPusher console, then enter its AppToken and at least one recipient UID or numeric Topic ID. UIDs and Topic IDs can be separated by new lines, commas, or semicolons. WinToastRelay sends plain-text messages through `POST https://wxpusher.zjiecode.com/api/send/message`; summary and content templates support the same variables as Bark.
+
+The AppToken is stored in Windows Credential Manager. A request is considered delivered only when the HTTP response succeeds and the WxPusher business response code is `1000`. Configuration follows the documented limits of 2,000 UIDs or five Topic IDs per request. See the [WxPusher standard push API documentation](https://wxpusher.zjiecode.com/docs/api-reference.html) for application and recipient setup.
 
 ### Generic JSON webhook
 
@@ -110,11 +121,11 @@ Title and body templates support `{app}`, `{title}`, `{body}`, `{id}`, `{eventTy
 }
 ```
 
-The `X-WinToastRelay-Delivery` header contains the same delivery ID, making receiver-side deduplication straightforward. Transient failures (timeouts, 429 responses, and 5xx responses) are persisted locally and retried with exponential backoff. Other failed responses are persisted as dead letters and reported in the activity view for the active session.
+The `X-WinToastRelay-Delivery` header contains the same delivery ID, making receiver-side deduplication straightforward. Transient failures (timeouts, 429 responses, 5xx responses, and temporary WxPusher business errors) are persisted locally and retried with exponential backoff. Other failed responses are persisted as dead letters and reported in the activity view for the active session.
 
 ## Privacy
 
-Webhook delivery sends the visible notification text, source application display name, and creation time to the configured endpoint. Review the endpoint's data retention and access policies before relaying sensitive notifications. The optional Bearer token is stored only in Windows Credential Manager.
+Delivery sends the visible notification text, source application display name, and creation time to the configured Bark, WxPusher, or JSON webhook destination. Review the destination's data retention and access policies before relaying sensitive notifications. The WxPusher AppToken and optional webhook Bearer token are stored only in Windows Credential Manager.
 
 ## License
 

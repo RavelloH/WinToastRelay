@@ -7,7 +7,7 @@ using Microsoft.UI.Xaml.Media.Imaging;
 namespace WinToastRelay.Services;
 
 /// <summary>
-/// Event-driven bridge from Windows notifications to a webhook. It enumerates the
+/// Event-driven bridge from Windows notifications to a delivery destination. It enumerates the
 /// notification center only at startup and in response to NotificationChanged events.
 /// </summary>
 public sealed class NotificationRelayService
@@ -32,12 +32,18 @@ public sealed class NotificationRelayService
     {
         _deliveryQueue.OutcomeReceived += (_, outcome) =>
         {
+            var channel = _target.IsBark ? "Bark" : _target.IsWxPusher ? "WxPusher" : "JSON Webhook";
+            var parameters = _target.IsBark
+                ? _target.BarkParameters.Replace("\r", " ").Replace("\n", "; ")
+                : _target.IsWxPusher
+                    ? $"UIDs: {(string.IsNullOrWhiteSpace(_target.WxPusherUids) ? "none" : "configured")}; topics: {(string.IsNullOrWhiteSpace(_target.WxPusherTopicIds) ? "none" : "configured")}; app token: configured"
+                    : string.IsNullOrWhiteSpace(_target.BearerToken) ? "Bearer token: none" : "Bearer token: configured";
             ActivityReceived?.Invoke(this, new ActivityEntry(
                 DateTimeOffset.Now,
                 outcome.Notification.App,
                 string.IsNullOrWhiteSpace(outcome.Notification.Title) ? outcome.Notification.Body : outcome.Notification.Title,
                 outcome.Result.Succeeded,
-                $"{(outcome.DeadLettered ? "Dead letter" : "Delivered")}: {outcome.Result.Detail} · Channel: {(_target.IsBark ? "Bark" : "JSON Webhook")} · Attempts: {outcome.Attempts} · Queued at: {outcome.QueuedAt:O} · Completed at: {outcome.CompletedAt:O} · Notification time: {outcome.Notification.CreatedAt:O} · Delivery ID: {outcome.DeliveryId} · Parameters: {(_target.IsBark ? (_target.BarkParameters.Replace("\r", " ").Replace("\n", "; ")) : (string.IsNullOrWhiteSpace(_target.BearerToken) ? "Bearer token: none" : "Bearer token: configured"))}")
+                $"{(outcome.DeadLettered ? "Dead letter" : "Delivered")}: {outcome.Result.Detail} · Channel: {channel} · Attempts: {outcome.Attempts} · Queued at: {outcome.QueuedAt:O} · Completed at: {outcome.CompletedAt:O} · Notification time: {outcome.Notification.CreatedAt:O} · Delivery ID: {outcome.DeliveryId} · Parameters: {parameters}")
                 { Body = outcome.Notification.Body });
         };
     }
@@ -57,7 +63,9 @@ public sealed class NotificationRelayService
         if (_isRunning) return new DeliveryResult(true, "Already running");
 
         if (!WebhookClient.IsValidConfiguration(_target))
-            return new DeliveryResult(false, _target.IsBark ? "Invalid Bark configuration" : "Invalid webhook URL");
+            return new DeliveryResult(false, _target.IsBark
+                ? "Invalid Bark configuration"
+                : _target.IsWxPusher ? "Invalid WxPusher configuration" : "Invalid webhook URL");
 
         var access = await _listener.RequestAccessAsync();
         if (access != UserNotificationListenerAccessStatus.Allowed)
@@ -116,7 +124,7 @@ public sealed class NotificationRelayService
         var payload = new WebhookPayload(
             "relay.test",
             Guid.NewGuid().ToString("N"),
-            new RelayNotification(0, "WinToastRelay", "Webhook test", "Your webhook connection is working.", DateTimeOffset.UtcNow));
+            new RelayNotification(0, "WinToastRelay", "Delivery test", "Your notification destination is working.", DateTimeOffset.UtcNow));
         return DeliverAsync(payload);
     }
 

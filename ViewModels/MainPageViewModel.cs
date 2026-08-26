@@ -25,6 +25,11 @@ public partial class MainPageViewModel : ObservableObject
     [ObservableProperty] public partial string BarkTitleTemplate { get; set; } = "{app}: {title}";
     [ObservableProperty] public partial string BarkBodyTemplate { get; set; } = "{body}";
     [ObservableProperty] public partial string BarkParameters { get; set; } = "level=active\nicon=https://raw.ravelloh.com/icon/WinToastRelay.png";
+    [ObservableProperty] public partial string WxPusherAppToken { get; set; } = string.Empty;
+    [ObservableProperty] public partial string WxPusherUids { get; set; } = string.Empty;
+    [ObservableProperty] public partial string WxPusherTopicIds { get; set; } = string.Empty;
+    [ObservableProperty] public partial string WxPusherSummaryTemplate { get; set; } = "{app}: {title}";
+    [ObservableProperty] public partial string WxPusherContentTemplate { get; set; } = "{title}\n{body}";
     [ObservableProperty] public partial string AllowedApplications { get; set; } = string.Empty;
     [ObservableProperty] public partial string StatusDetail { get; set; } = "尚未启动监听";
     [ObservableProperty] public partial string CurrentSection { get; set; } = "overview";
@@ -59,7 +64,10 @@ public partial class MainPageViewModel : ObservableObject
     public Visibility SettingsVisibility => CurrentSection == "settings" ? Visibility.Visible : Visibility.Collapsed;
     public Visibility BarkVisibility => string.Equals(DeliveryMode, RelayDeliveryTarget.BarkMode, StringComparison.OrdinalIgnoreCase)
         ? Visibility.Visible : Visibility.Collapsed;
-    public Visibility JsonWebhookVisibility => BarkVisibility == Visibility.Visible ? Visibility.Collapsed : Visibility.Visible;
+    public Visibility WxPusherVisibility => string.Equals(DeliveryMode, RelayDeliveryTarget.WxPusherMode, StringComparison.OrdinalIgnoreCase)
+        ? Visibility.Visible : Visibility.Collapsed;
+    public Visibility JsonWebhookVisibility => string.Equals(DeliveryMode, RelayDeliveryTarget.JsonWebhookMode, StringComparison.OrdinalIgnoreCase)
+        ? Visibility.Visible : Visibility.Collapsed;
 
     public string AppSubtitle => IsChinese ? "原生 Windows 通知的实时推送桥接" : "A real-time delivery bridge for native Windows notifications";
     public string OverviewLabel => IsChinese ? "主页" : "Home";
@@ -76,7 +84,7 @@ public partial class MainPageViewModel : ObservableObject
             : (IsChinese ? "等待配置和权限" : "Waiting for setup and permission");
     public string StartRelayLabel => IsChinese ? "自动启动" : "Starts automatically";
     public string SetupCardTitle => IsChinese ? "先连接你的通知通道" : "Connect a notification destination";
-    public string SetupCardDescription => IsChinese ? "默认使用 Bark JSON POST；也可切换到通用 JSON Webhook。" : "Bark JSON POST is the default; a generic JSON webhook remains available.";
+    public string SetupCardDescription => IsChinese ? "默认使用 Bark，也支持 WxPusher 标准推送和通用 JSON Webhook。" : "Bark is the default; WxPusher standard push and generic JSON webhooks are also supported.";
     public Visibility SetupCardVisibility => IsDestinationConfigured ? Visibility.Collapsed : Visibility.Visible;
     public string StatsTitle => IsChinese ? "概览" : "Overview";
     public string StatsDeliveriesLabel => IsChinese ? "14 天传递" : "14-day deliveries";
@@ -96,6 +104,7 @@ public partial class MainPageViewModel : ObservableObject
     public string WebhookUrlPlaceholder => "https://example.com/hooks/wintoast";
     public string DeliveryModeLabel => IsChinese ? "传递方式" : "Delivery mode";
     public string BarkModeLabel => IsChinese ? "Bark（推荐）" : "Bark (recommended)";
+    public string WxPusherModeLabel => "WxPusher";
     public string JsonWebhookModeLabel => IsChinese ? "通用 JSON Webhook" : "Generic JSON webhook";
     public string BarkServerUrlLabel => IsChinese ? "Bark 服务地址" : "Bark server URL";
     public string BarkServerUrlDescription => IsChinese ? "官方服务为 https://api.day.app，也支持自托管 Bark。" : "Use https://api.day.app or your self-hosted Bark server.";
@@ -106,6 +115,16 @@ public partial class MainPageViewModel : ObservableObject
     public string BarkParametersLabel => IsChinese ? "附加 Bark 参数" : "Additional Bark parameters";
     public string BarkParametersDescription => IsChinese ? "每行 key=value，例如 sound=bell、group=work、level=timeSensitive、url=https://example.com；这些参数会作为 JSON 字段发送。" : "One key=value per line, e.g. sound=bell, group=work, level=timeSensitive, url=https://example.com. They are sent as JSON fields.";
     public string BarkRouteDescription => IsChinese ? "请求使用 Bark /push JSON POST。设备密钥、标题、正文和附加参数都放在请求体中，不受 URL 长度限制；正文过长时会自动截断并标记。" : "Requests use Bark's /push JSON POST. The device key, title, body, and additional parameters stay in the request body, avoiding URL length limits; oversized text is truncated and marked automatically.";
+    public string WxPusherRouteDescription => IsChinese ? "请求使用 WxPusher 标准推送 API，并校验响应业务码 1000。AppToken 仅保存在 Windows 凭据管理器中。" : "Requests use the WxPusher standard push API and require business code 1000 in the response. The app token is stored only in Windows Credential Manager.";
+    public string WxPusherAppTokenLabel => "AppToken";
+    public string WxPusherAppTokenDescription => IsChinese ? "在 WxPusher 管理后台创建应用后获取，以密钥方式保存。" : "Create an app in the WxPusher console to obtain it; it is stored as a credential.";
+    public string WxPusherUidsLabel => IsChinese ? "接收用户 UID" : "Recipient UIDs";
+    public string WxPusherUidsDescription => IsChinese ? "每行或用逗号分隔一个 UID；UID 与 Topic ID 至少配置一种，单次最多 2000 个 UID。" : "Enter one UID per line or separate them with commas. Configure UIDs or topic IDs; up to 2,000 UIDs are allowed per request.";
+    public string WxPusherTopicIdsLabel => IsChinese ? "接收主题 Topic ID" : "Recipient topic IDs";
+    public string WxPusherTopicIdsDescription => IsChinese ? "每行或用逗号分隔一个数字 Topic ID；单次最多 5 个。" : "Enter one numeric topic ID per line or separate them with commas; up to five are allowed per request.";
+    public string WxPusherSummaryTemplateLabel => IsChinese ? "摘要模板" : "Summary template";
+    public string WxPusherContentTemplateLabel => IsChinese ? "正文模板" : "Content template";
+    public string WxPusherTemplateDescription => IsChinese ? "以纯文本发送。可用变量：{app}、{title}、{body}、{id}、{eventType}、{createdAt}；摘要最长 100 个字符。" : "Sent as plain text. Variables: {app}, {title}, {body}, {id}, {eventType}, {createdAt}. Summaries are limited to 100 characters.";
     public string BearerTokenLabel => IsChinese ? "Bearer Token（可选）" : "Bearer token (optional)";
     public string BearerTokenDescription => IsChinese ? "令牌保存于 Windows 凭据管理器，不写入配置文件。" : "Stored in Windows Credential Manager, never in the settings file.";
     public string SaveLabel => IsChinese ? "保存设置" : "Save settings";
@@ -120,7 +139,7 @@ public partial class MainPageViewModel : ObservableObject
     public string EmptyActivityDescription => IsChinese ? "新的通知及测试发送结果会显示在这里。" : "New notification and test-delivery results will appear here.";
     public string SettingsTitle => IsChinese ? "偏好设置" : "Preferences";
     public string AboutTitle => IsChinese ? "关于 WinToastRelay" : "About WinToastRelay";
-    public string AboutDescription => IsChinese ? "使用 Windows 原生通知事件，将通知实时转发到 Bark 或 JSON Webhook。" : "Uses native Windows notification events to relay notifications to Bark or a JSON webhook.";
+    public string AboutDescription => IsChinese ? "使用 Windows 原生通知事件，将通知实时转发到 Bark、WxPusher 或 JSON Webhook。" : "Uses native Windows notification events to relay notifications to Bark, WxPusher, or a JSON webhook.";
     public string MadeByLabel => "Made by RavelloH";
     public string GithubLabel => IsChinese ? "GitHub 仓库" : "GitHub repository";
     public string GithubUrl => "https://github.com/RavelloH/WinToastRelay";
@@ -166,6 +185,7 @@ public partial class MainPageViewModel : ObservableObject
     partial void OnDeliveryModeChanged(string value)
     {
         OnPropertyChanged(nameof(BarkVisibility));
+        OnPropertyChanged(nameof(WxPusherVisibility));
         OnPropertyChanged(nameof(JsonWebhookVisibility));
     }
 
@@ -197,13 +217,17 @@ public partial class MainPageViewModel : ObservableObject
     public async Task InitializeAsync()
     {
         _settings = await _settingsStore.LoadAsync();
-        DeliveryMode = _settings.DeliveryMode;
+        DeliveryMode = NormalizeDeliveryMode(_settings.DeliveryMode);
         WebhookUrl = _settings.WebhookUrl;
         BarkServerUrl = _settings.BarkServerUrl;
         BarkDeviceKey = _settings.BarkDeviceKey;
         BarkTitleTemplate = _settings.BarkTitleTemplate;
         BarkBodyTemplate = _settings.BarkBodyTemplate;
         BarkParameters = _settings.BarkParameters;
+        WxPusherUids = _settings.WxPusherUids;
+        WxPusherTopicIds = _settings.WxPusherTopicIds;
+        WxPusherSummaryTemplate = _settings.WxPusherSummaryTemplate;
+        WxPusherContentTemplate = _settings.WxPusherContentTemplate;
         if (!BarkParameters.Contains("icon=", StringComparison.OrdinalIgnoreCase))
             BarkParameters = string.IsNullOrWhiteSpace(BarkParameters)
                 ? "level=active\nicon=https://raw.ravelloh.com/icon/WinToastRelay.png"
@@ -211,6 +235,7 @@ public partial class MainPageViewModel : ObservableObject
         _settings.BarkParameters = BarkParameters;
         AllowedApplications = _settings.AllowedApplications;
         BearerToken = _secretStore.Get();
+        WxPusherAppToken = _secretStore.GetWxPusherAppToken();
         IsChinese = !string.Equals(_settings.Language, "en-US", StringComparison.OrdinalIgnoreCase);
         RelayManuallyStopped = _settings.RelayManuallyStopped;
         StartWithWindows = await _startupTaskService.IsEnabledAsync();
@@ -277,7 +302,7 @@ public partial class MainPageViewModel : ObservableObject
             "WinToastRelay",
             IsChinese ? "测试发送" : "Test delivery",
             result.Succeeded,
-            result.Detail) { Body = IsChinese ? "你的通知通道连接正常。" : "Your webhook connection is working." });
+            result.Detail) { Body = IsChinese ? "你的通知通道连接正常。" : "Your notification destination is working." });
     }
 
     [RelayCommand]
@@ -305,19 +330,22 @@ public partial class MainPageViewModel : ObservableObject
     private async Task SaveConfigurationAsync()
     {
         _settings.WebhookUrl = WebhookUrl.Trim();
-        _settings.DeliveryMode = string.Equals(DeliveryMode, RelayDeliveryTarget.JsonWebhookMode, StringComparison.OrdinalIgnoreCase)
-            ? RelayDeliveryTarget.JsonWebhookMode
-            : RelayDeliveryTarget.BarkMode;
+        _settings.DeliveryMode = NormalizeDeliveryMode(DeliveryMode);
         _settings.BarkServerUrl = BarkServerUrl.Trim();
         _settings.BarkDeviceKey = BarkDeviceKey.Trim();
         _settings.BarkTitleTemplate = BarkTitleTemplate;
         _settings.BarkBodyTemplate = BarkBodyTemplate;
         _settings.BarkParameters = BarkParameters;
+        _settings.WxPusherUids = WxPusherUids;
+        _settings.WxPusherTopicIds = WxPusherTopicIds;
+        _settings.WxPusherSummaryTemplate = WxPusherSummaryTemplate;
+        _settings.WxPusherContentTemplate = WxPusherContentTemplate;
         _settings.AllowedApplications = AllowedApplications;
         _settings.Language = IsChinese ? "zh-CN" : "en-US";
         _settings.RelayEnabled = IsRelayRunning;
         _settings.StartWithWindows = StartWithWindows;
         _secretStore.Save(BearerToken.Trim());
+        _secretStore.SaveWxPusherAppToken(WxPusherAppToken.Trim());
         await _settingsStore.SaveAsync(_settings);
         _relayService.Configure(CreateTarget(), AllowedApplications, _settings.ApplicationFilterEnabled);
     }
@@ -330,7 +358,21 @@ public partial class MainPageViewModel : ObservableObject
         BarkDeviceKey.Trim(),
         BarkTitleTemplate,
         BarkBodyTemplate,
-        BarkParameters);
+        BarkParameters,
+        WxPusherAppToken: WxPusherAppToken.Trim(),
+        WxPusherUids: WxPusherUids,
+        WxPusherTopicIds: WxPusherTopicIds,
+        WxPusherSummaryTemplate: WxPusherSummaryTemplate,
+        WxPusherContentTemplate: WxPusherContentTemplate);
+
+    private static string NormalizeDeliveryMode(string deliveryMode)
+    {
+        if (string.Equals(deliveryMode, RelayDeliveryTarget.JsonWebhookMode, StringComparison.OrdinalIgnoreCase))
+            return RelayDeliveryTarget.JsonWebhookMode;
+        if (string.Equals(deliveryMode, RelayDeliveryTarget.WxPusherMode, StringComparison.OrdinalIgnoreCase))
+            return RelayDeliveryTarget.WxPusherMode;
+        return RelayDeliveryTarget.BarkMode;
+    }
 
     private void SetStatus(string status)
     {

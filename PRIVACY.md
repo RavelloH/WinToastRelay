@@ -1,6 +1,6 @@
 # WinToastRelay Privacy Policy
 
-**Effective date:** August 20, 2026
+**Effective date:** August 25, 2026
 
 WinToastRelay is an open-source Windows application maintained by RavelloH. It listens for Windows notifications on the local device and forwards selected notifications to a destination configured by the user.
 
@@ -17,13 +17,13 @@ Notification content may contain personal or sensitive information placed there 
 
 ## Where information is sent
 
-WinToastRelay sends notification data only to the Bark server or JSON Webhook endpoint selected and configured by the user. The endpoint may be operated by the user or by a third party. The endpoint's own privacy policy and retention practices apply to data it receives.
+WinToastRelay sends notification data only to the Bark server, WxPusher service, or JSON Webhook endpoint selected and configured by the user. The destination may be operated by the user or by a third party. The destination's own privacy policy and retention practices apply to data it receives.
 
 WinToastRelay does not send notification data to RavelloH, Microsoft, or an official WinToastRelay cloud service. There is no WinToastRelay-hosted relay server, analytics service, advertising SDK, or telemetry service.
 
 ## Credentials and local data
 
-An optional webhook bearer token is stored using the Windows Credential Manager. Other application settings, delivery queue data, and the local delivery history are stored in the app's Windows local application data folder. These files remain on the device and are not uploaded by WinToastRelay except when their configured webhook operation requires it.
+The WxPusher AppToken and optional webhook bearer token are stored using Windows Credential Manager. Other application settings, including WxPusher recipient identifiers, delivery queue data, and the local delivery history are stored in the app's Windows local application data folder. These files remain on the device and are not uploaded by WinToastRelay except when their configured delivery operation requires it.
 
 The local delivery history is retained for the recent-history period shown by the application. Pending deliveries may remain in the local queue until they are delivered or marked as failed. You can remove the application or its local data using Windows settings.
 
@@ -35,7 +35,7 @@ The application does not execute user-provided code and does not access files, c
 
 ## Security
 
-Webhook requests use the URL and transport configured by the user. HTTPS is recommended. A user-configured endpoint should be treated as a trusted recipient because notification content is sent to it directly.
+Delivery requests use the URL and transport configured by the user. HTTPS is required except for loopback development endpoints. A configured Bark server, WxPusher service, or webhook endpoint should be treated as a trusted recipient because notification content is sent to it directly.
 
 ## Children's privacy
 

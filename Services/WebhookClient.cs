@@ -14,6 +14,14 @@ public sealed class WebhookClient
     // alone, so the device key and configured Bark fields are included as well.
     private const int BarkPayloadByteLimit = 3500;
     private const string BarkTruncationSuffix = "\n[truncated by WinToastRelay]";
+    private const int WxPusherSuccessCode = 1000;
+    private const int WxPusherBusinessFailureCode = 1001;
+    private const int WxPusherUnauthorizedCode = 1002;
+    private const int WxPusherSignatureFailureCode = 1003;
+    private const int WxPusherNotFoundCode = 1004;
+    private const int WxPusherSummaryCharacterLimit = 100;
+    private const int WxPusherTopicLimit = 5;
+    private const int WxPusherUidLimit = 2000;
     private static readonly Encoding Utf8 = new UTF8Encoding(encoderShouldEmitUTF8Identifier: false);
     private static readonly HttpClient HttpClient = new() { Timeout = TimeSpan.FromSeconds(15) };
 
@@ -22,9 +30,24 @@ public sealed class WebhookClient
         (uri.Scheme == Uri.UriSchemeHttps ||
          (uri.Scheme == Uri.UriSchemeHttp && (uri.IsLoopback || string.Equals(uri.Host, "localhost", StringComparison.OrdinalIgnoreCase))));
 
-    public static bool IsValidConfiguration(RelayDeliveryTarget target) => target.IsBark
-        ? !string.IsNullOrWhiteSpace(target.BarkDeviceKey) && IsValidEndpoint(target.BarkServerUrl)
-        : IsValidEndpoint(target.WebhookUrl);
+    public static bool IsValidConfiguration(RelayDeliveryTarget target)
+    {
+        if (target.IsBark)
+            return !string.IsNullOrWhiteSpace(target.BarkDeviceKey) && IsValidEndpoint(target.BarkServerUrl);
+
+        if (target.IsWxPusher)
+        {
+            var uids = ParseWxPusherValues(target.WxPusherUids);
+            if (!TryParseWxPusherTopicIds(target.WxPusherTopicIds, out var topicIds)) return false;
+            return !string.IsNullOrWhiteSpace(target.WxPusherAppToken) &&
+                   IsValidEndpoint(target.WxPusherApiUrl) &&
+                   uids.Length <= WxPusherUidLimit &&
+                   topicIds.Length <= WxPusherTopicLimit &&
+                   (uids.Length > 0 || topicIds.Length > 0);
+        }
+
+        return target.IsJsonWebhook && IsValidEndpoint(target.WebhookUrl);
+    }
 
     public async Task<DeliveryResult> DeliverAsync(string endpoint, string bearerToken, WebhookPayload payload)
         => await DeliverAsync(new RelayDeliveryTarget(
@@ -40,21 +63,25 @@ public sealed class WebhookClient
     public async Task<DeliveryResult> DeliverAsync(RelayDeliveryTarget target, WebhookPayload payload)
     {
         if (!IsValidConfiguration(target))
-            return new DeliveryResult(false, target.IsBark ? "Invalid Bark configuration" : "Invalid webhook URL", false);
+            return new DeliveryResult(false, target.IsBark
+                ? "Invalid Bark configuration"
+                : target.IsWxPusher ? "Invalid WxPusher configuration" : "Invalid webhook URL", false);
 
         var uri = target.IsBark
             ? BuildBarkPushUri(target.BarkServerUrl)
-            : new Uri(target.WebhookUrl, UriKind.Absolute);
+            : new Uri(target.IsWxPusher ? target.WxPusherApiUrl : target.WebhookUrl, UriKind.Absolute);
 
         using var request = new HttpRequestMessage(HttpMethod.Post, uri)
         {
             Content = target.IsBark
                 ? new StringContent(CreateBarkJson(target, payload), Encoding.UTF8, "application/json")
-                : new StringContent(JsonSerializer.Serialize(payload, AppJsonContext.Default.WebhookPayload), Encoding.UTF8, "application/json")
+                : target.IsWxPusher
+                    ? new StringContent(CreateWxPusherJson(target, payload), Encoding.UTF8, "application/json")
+                    : new StringContent(JsonSerializer.Serialize(payload, AppJsonContext.Default.WebhookPayload), Encoding.UTF8, "application/json")
         };
         request.Headers.Add("X-WinToastRelay-Delivery", payload.DeliveryId);
         request.Headers.UserAgent.Add(new ProductInfoHeaderValue("WinToastRelay", "0.1"));
-        if (!target.IsBark && !string.IsNullOrWhiteSpace(target.BearerToken))
+        if (target.IsJsonWebhook && !string.IsNullOrWhiteSpace(target.BearerToken))
             request.Headers.Authorization = new AuthenticationHeaderValue("Bearer", target.BearerToken);
 
         try
@@ -63,8 +90,12 @@ public sealed class WebhookClient
             var retryable = response.StatusCode == System.Net.HttpStatusCode.RequestTimeout ||
                             response.StatusCode == System.Net.HttpStatusCode.TooManyRequests ||
                             (int)response.StatusCode >= 500;
-            return new DeliveryResult(response.IsSuccessStatusCode,
-                $"HTTP {(int)response.StatusCode} {response.ReasonPhrase}", retryable);
+            if (!response.IsSuccessStatusCode)
+                return new DeliveryResult(false, $"HTTP {(int)response.StatusCode} {response.ReasonPhrase}", retryable);
+
+            return target.IsWxPusher
+                ? CreateWxPusherResult(await response.Content.ReadAsStringAsync(), CountWxPusherRecipients(target))
+                : new DeliveryResult(true, $"HTTP {(int)response.StatusCode} {response.ReasonPhrase}", false);
         }
         catch (Exception ex) when (ex is HttpRequestException or TaskCanceledException)
         {
@@ -116,6 +147,100 @@ public sealed class WebhookClient
         }
 
         return json.ToJsonString();
+    }
+
+    private static string CreateWxPusherJson(RelayDeliveryTarget target, WebhookPayload payload)
+    {
+        var uids = ParseWxPusherValues(target.WxPusherUids);
+        TryParseWxPusherTopicIds(target.WxPusherTopicIds, out var topicIds);
+        var json = new JsonObject
+        {
+            ["appToken"] = target.WxPusherAppToken.Trim(),
+            ["content"] = ApplyTemplate(target.WxPusherContentTemplate, payload, "{title}\n{body}"),
+            ["summary"] = TruncateCharacters(ApplyTemplate(target.WxPusherSummaryTemplate, payload, "{app}: {title}"), WxPusherSummaryCharacterLimit),
+            ["contentType"] = 1,
+        };
+
+        if (uids.Length > 0)
+        {
+            var uidNodes = new JsonArray();
+            foreach (var uid in uids) uidNodes.Add(uid);
+            json["uids"] = uidNodes;
+        }
+
+        if (topicIds.Length > 0)
+        {
+            var topicNodes = new JsonArray();
+            foreach (var topicId in topicIds) topicNodes.Add(topicId);
+            json["topicIds"] = topicNodes;
+        }
+
+        return json.ToJsonString();
+    }
+
+    private static DeliveryResult CreateWxPusherResult(string responseBody, int expectedRecipientCount)
+    {
+        try
+        {
+            using var json = JsonDocument.Parse(responseBody);
+            if (!json.RootElement.TryGetProperty("code", out var codeElement) || !codeElement.TryGetInt32(out var code))
+                return new DeliveryResult(false, "Invalid WxPusher response", true);
+
+            string? message = null;
+            if (json.RootElement.TryGetProperty("msg", out var messageElement) && messageElement.ValueKind == JsonValueKind.String)
+                message = messageElement.GetString();
+            else if (json.RootElement.TryGetProperty("message", out messageElement) && messageElement.ValueKind == JsonValueKind.String)
+                message = messageElement.GetString();
+
+            var detail = string.IsNullOrWhiteSpace(message) ? $"WxPusher {code}" : $"WxPusher {code} {message}";
+            if (code != WxPusherSuccessCode)
+                return new DeliveryResult(false, detail, IsWxPusherBusinessErrorRetryable(code));
+
+            if (!json.RootElement.TryGetProperty("data", out var dataElement) || dataElement.ValueKind != JsonValueKind.Array)
+                return new DeliveryResult(false, "Invalid WxPusher response: missing recipient results", true);
+
+            var recipientCount = dataElement.GetArrayLength();
+            if (recipientCount != expectedRecipientCount)
+                return new DeliveryResult(false,
+                    $"Invalid WxPusher response: expected {expectedRecipientCount} recipient results, received {recipientCount}", true);
+
+            var failedCodes = new List<int>();
+            foreach (var recipient in dataElement.EnumerateArray())
+            {
+                if (recipient.ValueKind != JsonValueKind.Object ||
+                    !recipient.TryGetProperty("code", out var recipientCodeElement) ||
+                    !recipientCodeElement.TryGetInt32(out var recipientCode))
+                    return new DeliveryResult(false, "Invalid WxPusher response: malformed recipient result", true);
+                if (recipientCode != WxPusherSuccessCode) failedCodes.Add(recipientCode);
+            }
+
+            if (failedCodes.Count == 0) return new DeliveryResult(true, detail, false);
+
+            var failedCodeList = string.Join(", ", failedCodes.Distinct().Order());
+            return new DeliveryResult(false,
+                $"{detail} · Recipients failed: {failedCodes.Count}/{recipientCount} · Codes: {failedCodeList}",
+                failedCodes.Any(IsWxPusherBusinessErrorRetryable));
+        }
+        catch (JsonException)
+        {
+            return new DeliveryResult(false, "Invalid WxPusher response", true);
+        }
+    }
+
+    private static bool IsWxPusherBusinessErrorRetryable(int code) => code switch
+    {
+        WxPusherBusinessFailureCode or
+        WxPusherUnauthorizedCode or
+        WxPusherSignatureFailureCode or
+        WxPusherNotFoundCode => false,
+        _ => true,
+    };
+
+    private static int CountWxPusherRecipients(RelayDeliveryTarget target)
+    {
+        var count = ParseWxPusherValues(target.WxPusherUids).Length;
+        if (TryParseWxPusherTopicIds(target.WxPusherTopicIds, out var topicIds)) count += topicIds.Length;
+        return count;
     }
 
     private static void FitBarkTextProperty(JsonObject json, string propertyName, string originalValue)
@@ -179,10 +304,10 @@ public sealed class WebhookClient
         return JsonValue.Create(value)!;
     }
 
-    private static string ApplyTemplate(string template, WebhookPayload payload)
+    private static string ApplyTemplate(string template, WebhookPayload payload, string defaultTemplate = "{body}")
     {
         var notification = payload.Notification;
-        var value = string.IsNullOrWhiteSpace(template) ? "{body}" : template;
+        var value = string.IsNullOrWhiteSpace(template) ? defaultTemplate : template;
         return value
             .Replace("{app}", notification.App, StringComparison.OrdinalIgnoreCase)
             .Replace("{title}", notification.Title, StringComparison.OrdinalIgnoreCase)
@@ -190,6 +315,41 @@ public sealed class WebhookClient
             .Replace("{id}", notification.Id.ToString(), StringComparison.OrdinalIgnoreCase)
             .Replace("{eventType}", payload.EventType, StringComparison.OrdinalIgnoreCase)
             .Replace("{createdAt}", notification.CreatedAt.ToString("O"), StringComparison.OrdinalIgnoreCase);
+    }
+
+    private static string TruncateCharacters(string value, int maxCharacters)
+    {
+        var builder = new StringBuilder();
+        var characterCount = 0;
+        foreach (var rune in value.EnumerateRunes())
+        {
+            if (characterCount == maxCharacters) break;
+            builder.Append(rune);
+            characterCount++;
+        }
+        return builder.ToString();
+    }
+
+    private static string[] ParseWxPusherValues(string values) => values
+        .Split(['\r', '\n', ',', ';'], StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries)
+        .Distinct(StringComparer.Ordinal)
+        .ToArray();
+
+    private static bool TryParseWxPusherTopicIds(string values, out long[] topicIds)
+    {
+        var rawValues = ParseWxPusherValues(values);
+        var parsedValues = new List<long>(rawValues.Length);
+        foreach (var value in rawValues)
+        {
+            if (!long.TryParse(value, NumberStyles.Integer, CultureInfo.InvariantCulture, out var topicId) || topicId <= 0)
+            {
+                topicIds = [];
+                return false;
+            }
+            if (!parsedValues.Contains(topicId)) parsedValues.Add(topicId);
+        }
+        topicIds = [.. parsedValues];
+        return true;
     }
 
     private static IEnumerable<(string Key, string Value)> ParseBarkParameters(string parameters)

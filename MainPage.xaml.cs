@@ -27,6 +27,7 @@ public sealed partial class MainPage : Page
         RootNavigationView.SelectedItem = RootNavigationView.MenuItems[0];
         await ViewModel.InitializeAsync();
         BearerTokenBox.Password = ViewModel.BearerToken;
+        WxPusherAppTokenBox.Password = ViewModel.WxPusherAppToken;
         _initializing = true;
         LanguageCombo.SelectedIndex = ViewModel.IsChinese ? 0 : 1;
         _initializing = false;
@@ -53,6 +54,12 @@ public sealed partial class MainPage : Page
     {
         if (sender is PasswordBox box)
             ViewModel.BearerToken = box.Password;
+    }
+
+    private void WxPusherAppTokenBox_PasswordChanged(object sender, Microsoft.UI.Xaml.RoutedEventArgs e)
+    {
+        if (sender is PasswordBox box)
+            ViewModel.WxPusherAppToken = box.Password;
     }
 
     private async void LanguageCombo_SelectionChanged(object sender, SelectionChangedEventArgs e)
