@@ -1,6 +1,6 @@
 # WinToastRelay Privacy Policy
 
-**Effective date:** August 25, 2026
+**Effective date:** August 26, 2026
 
 WinToastRelay is an open-source Windows application maintained by RavelloH. It listens for Windows notifications on the local device and forwards selected notifications to a destination configured by the user.
 
@@ -31,11 +31,11 @@ The local delivery history is retained for the recent-history period shown by th
 
 WinToastRelay requests notification access through Windows' `UserNotificationListener` API. You can deny or revoke this access in Windows settings. You can also stop forwarding, change the destination, configure application filters, or close the application at any time.
 
-The application does not execute user-provided code and does not access files, cameras, microphones, contacts, precise location, or other unrelated device data.
+The application does not execute user-provided code or access user-selected files, arbitrary filesystem locations, cameras, microphones, contacts, precise location, or other unrelated device data. It does use its Windows local application data folder for settings, delivery queue data, dead-letter data, and local delivery history.
 
 ## Security
 
-Delivery requests use the URL and transport configured by the user. HTTPS is required except for loopback development endpoints. A configured Bark server, WxPusher service, or webhook endpoint should be treated as a trusted recipient because notification content is sent to it directly.
+Delivery requests use the URL and transport configured by the user. HTTPS is required except for HTTP loopback endpoints, which are allowed for local development and testing. A configured Bark server, WxPusher service, or webhook endpoint should be treated as a trusted recipient because notification content is sent to it directly.
 
 ## Children's privacy
 

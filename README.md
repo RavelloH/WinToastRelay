@@ -18,7 +18,7 @@ WinToastRelay is a native Windows 10/11 app that relays Windows toast notificati
 <img width="930" height="624" alt="Snipaste_2026-08-20_23-48-11" src="https://github.com/user-attachments/assets/4ddfe7ec-cc4f-44c0-9182-7ab0aea3c0a3" />
 <img width="930" height="624" alt="Snipaste_2026-08-20_23-48-22" src="https://github.com/user-attachments/assets/5f3c7860-663e-4720-b29e-f2f62ad2b0d3" />
 
-WinToastRelay uses `Windows.UI.Notifications.Management.UserNotificationListener` and its `NotificationChanged` event. It does not use a timer or polling loop and only subscribes to notification events to ensure high performance. The notification center is enumerated once at startup to establish a baseline; each subsequent event is then handled individually by its notification ID.
+WinToastRelay uses `Windows.UI.Notifications.Management.UserNotificationListener` and its `NotificationChanged` event. It does not use a timer or polling loop. When the listener starts, the notification center is enumerated once to establish a baseline; each subsequent event is handled individually by its notification ID.
 
 ## Features
 
@@ -51,7 +51,7 @@ dotnet build .\WinToastRelay.csproj -r win-x64 -p:Platform=x64
 dotnet test .\tests\WinToastRelay.Tests\WinToastRelay.Tests.csproj
 ```
 
-The project is intentionally packaged because the Windows notification listener requires an interactive packaged identity. On first use, click **Start listening** and approve notification access when Windows prompts you.
+The project is intentionally packaged because the Windows notification listener requires an interactive packaged identity. On first use, configure a valid delivery destination and approve notification access when Windows prompts you. Listening starts automatically after configuration.
 
 ## Development MSIX
 
@@ -103,7 +103,7 @@ Title and body templates support `{app}`, `{title}`, `{body}`, `{id}`, `{eventTy
 
 Create an application in the WxPusher console, then enter its AppToken and at least one recipient UID or numeric Topic ID. UIDs and Topic IDs can be separated by new lines, commas, or semicolons. WinToastRelay sends plain-text messages through `POST https://wxpusher.zjiecode.com/api/send/message`; summary and content templates support the same variables as Bark.
 
-The AppToken is stored in Windows Credential Manager. A request is considered delivered only when the HTTP response succeeds and the WxPusher business response code is `1000`. Configuration follows the documented limits of 2,000 UIDs or five Topic IDs per request. See the [WxPusher standard push API documentation](https://wxpusher.zjiecode.com/docs/api-reference.html) for application and recipient setup.
+The AppToken is stored in Windows Credential Manager. A request is considered delivered only when the HTTP response succeeds, the top-level WxPusher business response code is `1000`, and every recipient result is successful. Configuration supports up to 2,000 UIDs and 5 Topic IDs per request; both recipient types may be used together. See the [WxPusher standard push API documentation](https://wxpusher.zjiecode.com/docs/api-reference.html) for application and recipient setup.
 
 ### Generic JSON webhook
 
