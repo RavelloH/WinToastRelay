@@ -60,7 +60,10 @@ public sealed class WebhookClient
             string.Empty,
             string.Empty), payload);
 
-    public async Task<DeliveryResult> DeliverAsync(RelayDeliveryTarget target, WebhookPayload payload)
+    public Task<DeliveryResult> DeliverAsync(RelayDeliveryTarget target, WebhookPayload payload)
+        => DeliverAsync(target, payload, CancellationToken.None);
+
+    internal async Task<DeliveryResult> DeliverAsync(RelayDeliveryTarget target, WebhookPayload payload, CancellationToken cancellationToken)
     {
         if (!IsValidConfiguration(target))
             return new DeliveryResult(false, target.IsBark
@@ -86,7 +89,7 @@ public sealed class WebhookClient
 
         try
         {
-            using var response = await HttpClient.SendAsync(request);
+            using var response = await HttpClient.SendAsync(request, cancellationToken);
             var retryable = response.StatusCode == System.Net.HttpStatusCode.RequestTimeout ||
                             response.StatusCode == System.Net.HttpStatusCode.TooManyRequests ||
                             (int)response.StatusCode >= 500;
@@ -96,6 +99,10 @@ public sealed class WebhookClient
             return target.IsWxPusher
                 ? CreateWxPusherResult(await response.Content.ReadAsStringAsync(), CountWxPusherRecipients(target))
                 : new DeliveryResult(true, $"HTTP {(int)response.StatusCode} {response.ReasonPhrase}", false);
+        }
+        catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
+        {
+            throw;
         }
         catch (Exception ex) when (ex is HttpRequestException or TaskCanceledException)
         {

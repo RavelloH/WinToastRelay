@@ -147,8 +147,11 @@ public sealed partial class MainWindow : Window
 
     private async void ExitFromTray_Click(object sender, RoutedEventArgs e)
     {
+        if (_isExiting) return;
         _isExiting = true;
         _trayIcon.Dispose();
         await App.ShutdownAsync();
     }
+
+    public void ShowFromExternalActivation() => ShowFromTray();
 }

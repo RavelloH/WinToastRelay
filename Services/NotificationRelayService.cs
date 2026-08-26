@@ -141,10 +141,13 @@ public sealed class NotificationRelayService
         {
             var notifications = await _listener.GetNotificationsAsync(NotificationKinds.Toast);
             _knownNotifications.Clear();
+            var observedApplications = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
             foreach (var notification in notifications)
             {
                 _knownNotifications[notification.Id] = Fingerprint(notification);
-                ObserveApplication(notification.AppInfo.DisplayInfo.DisplayName);
+                var application = notification.AppInfo.DisplayInfo.DisplayName;
+                if (observedApplications.Add(application))
+                    ObserveApplication(application);
             }
         }
         finally

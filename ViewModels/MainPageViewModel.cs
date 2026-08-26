@@ -16,6 +16,12 @@ public partial class MainPageViewModel : ObservableObject
     private readonly StartupTaskService _startupTaskService = new();
     private RelaySettings _settings = new();
     private const string ActivityFileName = "delivery-activity.json";
+    private readonly SemaphoreSlim _applicationsLoadLock = new(1, 1);
+    private readonly SemaphoreSlim _relayStartLock = new(1, 1);
+    private bool _initialized;
+    private bool _activityLoaded;
+    private bool _applicationsLoaded;
+    private string _statusSource = "尚未启动监听";
 
     [ObservableProperty] public partial string WebhookUrl { get; set; } = string.Empty;
     [ObservableProperty] public partial string BearerToken { get; set; } = string.Empty;
@@ -40,7 +46,12 @@ public partial class MainPageViewModel : ObservableObject
     [ObservableProperty] public partial bool IsDestinationConfigured { get; set; }
     [ObservableProperty] public partial bool RelayManuallyStopped { get; set; }
 
-    public ObservableCollection<ActivityEntry> Activity { get; } = new();
+    private ObservableCollection<ActivityEntry> _activity = new();
+    public ObservableCollection<ActivityEntry> Activity
+    {
+        get => _activity;
+        private set => SetProperty(ref _activity, value);
+    }
     public ObservableCollection<NotificationApplicationOption> Applications { get; } = new();
 
     public bool HasApplications => Applications.Count > 0;
@@ -212,11 +223,24 @@ public partial class MainPageViewModel : ObservableObject
         await StartRelayAutomaticallyAsync();
     }
 
-    partial void OnIsChineseChanged(bool value) => OnPropertyChanged(string.Empty);
+    partial void OnIsChineseChanged(bool value)
+    {
+        OnPropertyChanged(string.Empty);
+        // StatusDetail stores the last message in its source language. Re-localize it when
+        // the user switches languages so a previously shown Chinese status cannot remain on
+        // the English home page (and vice versa).
+        SetStatus(_statusSource);
+    }
 
     public async Task InitializeAsync()
     {
-        _settings = await _settingsStore.LoadAsync();
+        if (_initialized) return;
+
+        // Settings and startup-task state are independent. Read them together so the
+        // first frame does not wait for two unrelated storage calls in sequence.
+        var settingsTask = _settingsStore.LoadAsync();
+        var startupTask = _startupTaskService.IsEnabledAsync();
+        _settings = await settingsTask;
         DeliveryMode = NormalizeDeliveryMode(_settings.DeliveryMode);
         WebhookUrl = _settings.WebhookUrl;
         BarkServerUrl = _settings.BarkServerUrl;
@@ -238,47 +262,81 @@ public partial class MainPageViewModel : ObservableObject
         WxPusherAppToken = _secretStore.GetWxPusherAppToken();
         IsChinese = !string.Equals(_settings.Language, "en-US", StringComparison.OrdinalIgnoreCase);
         RelayManuallyStopped = _settings.RelayManuallyStopped;
-        StartWithWindows = await _startupTaskService.IsEnabledAsync();
+        StartWithWindows = await startupTask;
         _settings.ApplicationFilterEnabled |= ParseAllowedApplications().Count > 0;
         _relayService.Configure(CreateTarget(), AllowedApplications, _settings.ApplicationFilterEnabled);
         IsDestinationConfigured = WebhookClient.IsValidConfiguration(CreateTarget());
-        await LoadActivityAsync();
-        await LoadApplicationsAsync();
-        await StartRelayAutomaticallyAsync();
+
+        _initialized = true;
+        // History, notification enumeration, permission checks, and icon loading can all
+        // involve storage or WinRT calls. Defer them until the first frame is rendered so
+        // launching the app remains responsive.
+        _ = InitializeDeferredAsync();
+    }
+
+    private async Task InitializeDeferredAsync()
+    {
+        // Yield once to let WinUI paint the initial page before doing any deferred work.
+        await Task.Yield();
+        try
+        {
+            // Load the persisted history before subscribing to delivery events. This lets us
+            // replace the bound collection in one operation without losing a new entry.
+            await LoadActivityAsync();
+            await StartRelayAutomaticallyAsync();
+
+            // Application names are discovered by the relay's initial snapshot. Loading
+            // logos is intentionally deferred until the Filters page is opened.
+        }
+        catch (Exception ex)
+        {
+            SetStatus($"Initialization error: {ex.Message}");
+        }
     }
 
     private async Task StartRelayAutomaticallyAsync()
     {
-        if (IsBusy) return;
-        IsBusy = true;
+        await _relayStartLock.WaitAsync();
         try
         {
-            if (!WebhookClient.IsValidConfiguration(CreateTarget()))
+            if (IsBusy) return;
+            IsBusy = true;
+            try
             {
-                IsRelayRunning = false;
-                IsDestinationConfigured = false;
-                SetStatus(IsChinese ? "请先完成通知通道配置，保存后将自动开始监听" : "Complete the destination configuration; listening starts automatically after saving");
-                return;
-            }
+                if (!WebhookClient.IsValidConfiguration(CreateTarget()))
+                {
+                    IsRelayRunning = false;
+                    IsDestinationConfigured = false;
+                    SetStatus(IsChinese ? "请先完成通知通道配置，保存后将自动开始监听" : "Complete the destination configuration; listening starts automatically after saving");
+                    return;
+                }
 
-            IsDestinationConfigured = true;
-            if (RelayManuallyStopped)
+                IsDestinationConfigured = true;
+                if (RelayManuallyStopped)
+                {
+                    IsRelayRunning = false;
+                    SetStatus(IsChinese ? "转发已停止" : "Relay stopped");
+                    return;
+                }
+
+                _relayService.Configure(CreateTarget(), AllowedApplications, _settings.ApplicationFilterEnabled);
+                var result = await _relayService.StartAsync();
+                IsRelayRunning = result.Succeeded;
+                if (result.Succeeded) RelayManuallyStopped = false;
+                SetStatus(result.Succeeded ? (IsChinese ? "通知监听已自动启动" : "Notification listening started automatically") : result.Detail);
+                _settings.RelayEnabled = IsRelayRunning;
+                _settings.RelayManuallyStopped = RelayManuallyStopped;
+                await _settingsStore.SaveAsync(_settings);
+            }
+            finally
             {
-                IsRelayRunning = false;
-                SetStatus(IsChinese ? "转发已停止" : "Relay stopped");
-                return;
+                IsBusy = false;
             }
-
-            _relayService.Configure(CreateTarget(), AllowedApplications, _settings.ApplicationFilterEnabled);
-            var result = await _relayService.StartAsync();
-            IsRelayRunning = result.Succeeded;
-            if (result.Succeeded) RelayManuallyStopped = false;
-            SetStatus(result.Succeeded ? (IsChinese ? "通知监听已自动启动" : "Notification listening started automatically") : result.Detail);
-            _settings.RelayEnabled = IsRelayRunning;
-            _settings.RelayManuallyStopped = RelayManuallyStopped;
-            await _settingsStore.SaveAsync(_settings);
         }
-        finally { IsBusy = false; }
+        finally
+        {
+            _relayStartLock.Release();
+        }
     }
 
     [RelayCommand]
@@ -376,6 +434,7 @@ public partial class MainPageViewModel : ObservableObject
 
     private void SetStatus(string status)
     {
+        _statusSource = status;
         var localizedStatus = LocalizeStatus(status);
         if (App.DispatcherQueue is null) { StatusDetail = localizedStatus; return; }
         App.DispatcherQueue.TryEnqueue(() => StatusDetail = localizedStatus);
@@ -403,13 +462,30 @@ public partial class MainPageViewModel : ObservableObject
     }
 
     [RelayCommand]
-    private async Task RefreshApplicationsAsync() => await LoadApplicationsAsync();
+    private async Task RefreshApplicationsAsync() => await EnsureApplicationsLoadedAsync(force: true);
 
-    private async Task LoadApplicationsAsync()
+    public async Task EnsureApplicationsLoadedAsync(bool force = false)
     {
-        var enabled = ParseAllowedApplications();
-        foreach (var app in await _relayService.GetAvailableApplicationsAsync())
-            AddApplicationCore(app.Name, !_settings.ApplicationFilterEnabled || enabled.Contains(app.Name), app.Icon);
+        if (_applicationsLoaded && !force) return;
+
+        await _applicationsLoadLock.WaitAsync();
+        try
+        {
+            if (_applicationsLoaded && !force) return;
+
+            var enabled = ParseAllowedApplications();
+            foreach (var app in await _relayService.GetAvailableApplicationsAsync())
+                AddApplicationCore(app.Name, !_settings.ApplicationFilterEnabled || enabled.Contains(app.Name), app.Icon);
+            _applicationsLoaded = true;
+        }
+        catch (Exception ex)
+        {
+            SetStatus($"Application list error: {ex.Message}");
+        }
+        finally
+        {
+            _applicationsLoadLock.Release();
+        }
     }
 
     private void AddApplication(string application)
@@ -421,7 +497,15 @@ public partial class MainPageViewModel : ObservableObject
 
     private void AddApplicationCore(string application, bool isEnabled, Microsoft.UI.Xaml.Media.ImageSource? icon = null)
     {
-        if (Applications.Any(item => string.Equals(item.Name, application, StringComparison.OrdinalIgnoreCase))) return;
+        var existing = Applications.FirstOrDefault(item => string.Equals(item.Name, application, StringComparison.OrdinalIgnoreCase));
+        if (existing is not null)
+        {
+            // Names are discovered quickly from the listener snapshot; logo retrieval is
+            // deferred. Update the placeholder when the real icon arrives later.
+            if (icon is not null && existing.IconSource is null)
+                existing.IconSource = icon;
+            return;
+        }
         var item = new NotificationApplicationOption(application, isEnabled, icon);
         item.PropertyChanged += (_, args) =>
         {
@@ -449,27 +533,70 @@ public partial class MainPageViewModel : ObservableObject
 
     private string LocalizeStatus(string status) => status switch
     {
-        "Listening for Windows notifications" => IsChinese ? "正在监听 Windows 通知" : status,
-        "Relay paused" => IsChinese ? "转发已暂停" : status,
+        "尚未启动监听" or "Not listening yet" => IsChinese ? "尚未启动监听" : "Not listening yet",
+        "Listening for Windows notifications" or "正在监听 Windows 通知" => IsChinese ? "正在监听 Windows 通知" : "Listening for Windows notifications",
+        "Relay paused" or "转发已暂停" => IsChinese ? "转发已暂停" : "Relay paused",
+        "转发已停止" or "Relay stopped" => IsChinese ? "转发已停止" : "Relay stopped",
+        "通知监听已自动启动" or "Notification listening started automatically" => IsChinese ? "通知监听已自动启动" : "Notification listening started automatically",
+        "请先完成通知通道配置，保存后将自动开始监听" or "Complete the destination configuration; listening starts automatically after saving" => IsChinese
+            ? "请先完成通知通道配置，保存后将自动开始监听"
+            : "Complete the destination configuration; listening starts automatically after saving",
+        "设置已保存" or "Settings saved" => IsChinese ? "设置已保存" : "Settings saved",
+        "测试发送成功" or "Test delivered" => IsChinese ? "测试发送成功" : "Test delivered",
+        "已启用登录启动" or "Start with Windows enabled" => IsChinese ? "已启用登录启动" : "Start with Windows enabled",
+        "已关闭登录启动" or "Start with Windows disabled" => IsChinese ? "已关闭登录启动" : "Start with Windows disabled",
         _ => status
     };
 
     private async Task LoadActivityAsync()
     {
+        if (_activityLoaded) return;
+        _activityLoaded = true;
         try
         {
             var file = await Windows.Storage.ApplicationData.Current.LocalFolder.TryGetItemAsync(ActivityFileName) as Windows.Storage.StorageFile;
             if (file is null) return;
-            var loaded = JsonSerializer.Deserialize(await Windows.Storage.FileIO.ReadTextAsync(file), AppJsonContext.Default.ListActivityEntry) ?? [];
+            var json = await Windows.Storage.FileIO.ReadTextAsync(file);
+            // JSON parsing and filtering can be noticeable with a large activity file;
+            // keep that CPU work off the UI thread.
+            var loaded = await Task.Run(() =>
+                JsonSerializer.Deserialize(json, AppJsonContext.Default.ListActivityEntry) ?? []);
             var cutoff = DateTimeOffset.Now.AddDays(-14);
-            foreach (var item in loaded.Where(x => x.Time >= cutoff).OrderByDescending(x => x.Time)) Activity.Add(item);
-            OnPropertyChanged(nameof(ActivityEmptyVisibility));
-            OnPropertyChanged(nameof(ActivityListVisibility));
-            OnPropertyChanged(nameof(StatsDeliveriesValue));
-            OnPropertyChanged(nameof(StatsSuccessValue));
-            OnPropertyChanged(nameof(StatsApplicationsValue));
+            var recent = loaded
+                .Where(x => x.Time >= cutoff)
+                .OrderByDescending(x => x.Time)
+                .Take(500)
+                .ToList();
+
+            void ApplyLoadedActivity()
+            {
+                // Replacing the collection emits one property change instead of hundreds of
+                // individual Add notifications, which avoids repeated layout passes.
+                Activity = new ObservableCollection<ActivityEntry>(recent);
+                OnPropertyChanged(nameof(ActivityEmptyVisibility));
+                OnPropertyChanged(nameof(ActivityListVisibility));
+                OnPropertyChanged(nameof(StatsDeliveriesValue));
+                OnPropertyChanged(nameof(StatsSuccessValue));
+                OnPropertyChanged(nameof(StatsApplicationsValue));
+            }
+
+            if (App.DispatcherQueue is null || App.DispatcherQueue.HasThreadAccess)
+            {
+                ApplyLoadedActivity();
+            }
+            else
+            {
+                var completion = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+                App.DispatcherQueue.TryEnqueue(() =>
+                {
+                    try { ApplyLoadedActivity(); completion.SetResult(); }
+                    catch (Exception ex) { completion.SetException(ex); }
+                });
+                await completion.Task;
+            }
         }
         catch (JsonException) { }
+        catch (Exception) { }
     }
 
     private async Task SaveActivityAsync()

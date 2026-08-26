@@ -46,6 +46,8 @@ public sealed partial class MainPage : Page
         if (args.SelectedItem is NavigationViewItem item && item.Tag is string section)
         {
             ViewModel.CurrentSection = section;
+            if (string.Equals(section, "filters", StringComparison.OrdinalIgnoreCase))
+                _ = ViewModel.EnsureApplicationsLoadedAsync();
             PlayContentTransition();
         }
     }

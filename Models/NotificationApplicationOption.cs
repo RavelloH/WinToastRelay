@@ -14,8 +14,13 @@ public partial class NotificationApplicationOption : ObservableObject
     }
 
     public string Name { get; }
-    public ImageSource? IconSource { get; }
+
+    [ObservableProperty]
+    public partial ImageSource? IconSource { get; set; }
+
     public Visibility FallbackVisibility => IconSource is null ? Visibility.Visible : Visibility.Collapsed;
+
+    partial void OnIconSourceChanged(ImageSource? value) => OnPropertyChanged(nameof(FallbackVisibility));
 
     [ObservableProperty]
     public partial bool IsEnabled { get; set; }

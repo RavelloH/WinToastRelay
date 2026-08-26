@@ -18,6 +18,9 @@ namespace WinToastRelay;
 /// </summary>
 public partial class App : Application
 {
+    private const string MainInstanceKey = "WinToastRelay.Main";
+    private static AppInstance? _mainInstance;
+
     public static NotificationRelayService RelayService { get; } = new();
     /// <summary>
     /// The main application window. Use <c>App.Window</c> from any class that needs
@@ -42,8 +45,16 @@ public partial class App : Application
 
     public static async Task ShutdownAsync()
     {
-        await RelayService.StopAsync();
-        Environment.Exit(0);
+        try
+        {
+            await RelayService.StopAsync();
+        }
+        finally
+        {
+            // Do not leave the process alive if a third-party endpoint or another
+            // shutdown callback fails while the tray exit command is being handled.
+            Environment.Exit(0);
+        }
     }
 
     /// <summary>
@@ -60,13 +71,37 @@ public partial class App : Application
     /// <param name="args">Details about the launch request and process.</param>
     protected override void OnLaunched(Microsoft.UI.Xaml.LaunchActivatedEventArgs args)
     {
+        var activationArgs = AppInstance.GetCurrent().GetActivatedEventArgs();
+        var instance = AppInstance.FindOrRegisterForKey(MainInstanceKey);
+        if (!instance.IsCurrent)
+        {
+            instance.RedirectActivationToAsync(activationArgs).AsTask().GetAwaiter().GetResult();
+            return;
+        }
+
+        _mainInstance = instance;
+        _mainInstance.Activated += MainInstance_Activated;
+
         Window = new MainWindow();
         DispatcherQueue = Microsoft.UI.Dispatching.DispatcherQueue.GetForCurrentThread();
         Window.Activate();
 
-        if (AppInstance.GetCurrent().GetActivatedEventArgs().Kind == ExtendedActivationKind.StartupTask)
+        if (activationArgs.Kind == ExtendedActivationKind.StartupTask)
         {
             DispatcherQueue.TryEnqueue(() => WindowExtensions.Hide(Window));
         }
+    }
+
+    private void MainInstance_Activated(object? sender, AppActivationArguments args)
+    {
+        // StartupTask activation is intentionally kept hidden in the tray. A normal
+        // second launch should instead bring the existing window to the foreground.
+        if (args.Kind == ExtendedActivationKind.StartupTask) return;
+
+        DispatcherQueue?.TryEnqueue(() =>
+        {
+            if (Window is MainWindow mainWindow)
+                mainWindow.ShowFromExternalActivation();
+        });
     }
 }

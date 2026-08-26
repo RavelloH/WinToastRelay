@@ -11,7 +11,7 @@
   <Identity
     Name="RavelloH.WinToastRelay"
     Publisher="CN=184C7048-0661-4259-8EE3-39EFE462DFBE"
-    Version="1.0.18.0" />
+    Version="1.0.19.0" />
 
   <mp:PhoneIdentity PhoneProductId="65A58B93-3416-4698-BA94-A13E6D296F26" PhonePublisherId="00000000-0000-0000-0000-000000000000"/>
 

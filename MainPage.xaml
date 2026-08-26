@@ -155,17 +155,19 @@
                                 <TextBlock Text="{x:Bind ViewModel.EmptyActivityLabel, Mode=OneWay}" HorizontalAlignment="Center" Style="{StaticResource SubtitleTextBlockStyle}" />
                                 <TextBlock Text="{x:Bind ViewModel.EmptyActivityDescription, Mode=OneWay}" HorizontalAlignment="Center" MaxWidth="420" Opacity="0.62" TextAlignment="Center" TextWrapping="Wrap" />
                             </StackPanel>
-                            <ListView Padding="0" HorizontalContentAlignment="Stretch" Visibility="{x:Bind ViewModel.ActivityListVisibility, Mode=OneWay}" ItemsSource="{x:Bind ViewModel.Activity, Mode=OneWay}" SelectionMode="None">
-                                <ListView.ItemContainerStyle><Style TargetType="ListViewItem"><Setter Property="Padding" Value="0"/><Setter Property="Margin" Value="0"/><Setter Property="HorizontalContentAlignment" Value="Stretch"/></Style></ListView.ItemContainerStyle>
-                                <ListView.ItemTemplate>
+                            <ItemsRepeater HorizontalAlignment="Stretch" Visibility="{x:Bind ViewModel.ActivityListVisibility, Mode=OneWay}" ItemsSource="{x:Bind ViewModel.Activity, Mode=OneWay}">
+                                <ItemsRepeater.Layout>
+                                    <StackLayout Spacing="0" />
+                                </ItemsRepeater.Layout>
+                                <ItemsRepeater.ItemTemplate>
                                     <DataTemplate>
                                         <Expander HorizontalAlignment="Stretch" HorizontalContentAlignment="Stretch" Background="{ThemeResource CardBackgroundFillColorDefaultBrush}" CornerRadius="4" Margin="0,0,0,12">
                                             <Expander.Header><Grid Margin="18,14" ColumnSpacing="16"><Grid.ColumnDefinitions><ColumnDefinition Width="*"/><ColumnDefinition Width="Auto"/></Grid.ColumnDefinitions><StackPanel Spacing="7"><TextBlock Text="{Binding App}" Style="{StaticResource BodyStrongTextBlockStyle}"/><TextBlock Text="{Binding Summary}" Opacity="0.82" TextWrapping="Wrap"/><TextBlock Text="{Binding Body}" FontSize="15" TextWrapping="Wrap"/></StackPanel><TextBlock Grid.Column="1" Text="{Binding Time}" FontSize="12" Opacity="0.55" VerticalAlignment="Center"/></Grid></Expander.Header>
                                             <Border Padding="18,0,18,20"><StackPanel Spacing="10"><TextBlock Text="{Binding Detail}" Opacity="0.64" TextWrapping="Wrap"/></StackPanel></Border>
                                         </Expander>
                                     </DataTemplate>
-                                </ListView.ItemTemplate>
-                            </ListView>
+                                </ItemsRepeater.ItemTemplate>
+                            </ItemsRepeater>
                         </StackPanel>
 
                         <StackPanel Visibility="{x:Bind ViewModel.SettingsVisibility, Mode=OneWay}" Spacing="8">

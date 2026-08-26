@@ -101,7 +101,7 @@ public sealed class DeliveryQueue : IAsyncDisposable
             foreach (var item in due)
             {
                 if (cancellationToken.IsCancellationRequested) break;
-                var result = await _client.DeliverAsync(_target, item.Payload);
+                var result = await _client.DeliverAsync(_target, item.Payload, cancellationToken);
                 var outcome = ApplyResult(item.DeliveryId, result);
                 await SaveAsync();
                 OutcomeReceived?.Invoke(this, outcome);
