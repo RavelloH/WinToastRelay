@@ -17,13 +17,13 @@ Notification content may contain personal or sensitive information placed there 
 
 ## Where information is sent
 
-WinToastRelay sends notification data only to the Bark server, WxPusher service, or JSON Webhook endpoint selected and configured by the user. The destination may be operated by the user or by a third party. The destination's own privacy policy and retention practices apply to data it receives.
+WinToastRelay sends notification data only to the Bark server, WxPusher service, Feishu bot, Telegram Bot API, Discord webhook, or JSON Webhook endpoint selected and configured by the user. The destination may be operated by the user or by a third party. The destination's own privacy policy and retention practices apply to data it receives.
 
 WinToastRelay does not send notification data to RavelloH, Microsoft, or an official WinToastRelay cloud service. There is no WinToastRelay-hosted relay server, analytics service, advertising SDK, or telemetry service.
 
 ## Credentials and local data
 
-The WxPusher AppToken and optional webhook bearer token are stored using Windows Credential Manager. Other application settings, including WxPusher recipient identifiers, delivery queue data, and the local delivery history are stored in the app's Windows local application data folder. These files remain on the device and are not uploaded by WinToastRelay except when their configured delivery operation requires it.
+The Bark device key, WxPusher AppToken, Feishu signing secret, Telegram Bot token, and optional webhook bearer token are stored using Windows Credential Manager. Other application settings, including destination URLs, recipient identifiers, delivery queue data, and the local delivery history are stored in the app's Windows local application data folder. These files remain on the device and are not uploaded by WinToastRelay except when their configured delivery operation requires it.
 
 The local delivery history is retained for the recent-history period shown by the application. Pending deliveries may remain in the local queue until they are delivered or marked as failed. You can remove the application or its local data using Windows settings.
 
@@ -35,7 +35,7 @@ The application does not execute user-provided code or access user-selected file
 
 ## Security
 
-Delivery requests use the URL and transport configured by the user. HTTPS is required except for HTTP loopback endpoints, which are allowed for local development and testing. A configured Bark server, WxPusher service, or webhook endpoint should be treated as a trusted recipient because notification content is sent to it directly.
+Delivery requests use the URL and transport configured by the user. HTTPS is required except for HTTP loopback endpoints, which are allowed for local development and testing. A configured Bark server, WxPusher service, Feishu bot, Telegram bot, Discord webhook, or JSON webhook endpoint should be treated as a trusted recipient because notification content is sent to it directly.
 
 ## Children's privacy
 

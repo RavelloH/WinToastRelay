@@ -1,5 +1,6 @@
 using System.Net.Http.Headers;
 using System.Globalization;
+using System.Security.Cryptography;
 using System.Text;
 using System.Text.Json;
 using System.Text.Json.Nodes;
@@ -22,6 +23,10 @@ public sealed class WebhookClient
     private const int WxPusherSummaryCharacterLimit = 100;
     private const int WxPusherTopicLimit = 5;
     private const int WxPusherUidLimit = 2000;
+    private const int FeishuTextCharacterLimit = 30000;
+    private const int TelegramTextCharacterLimit = 4096;
+    private const int DiscordTextCharacterLimit = 2000;
+    private const string ChannelTruncationSuffix = "\n[truncated by WinToastRelay]";
     private static readonly Encoding Utf8 = new UTF8Encoding(encoderShouldEmitUTF8Identifier: false);
     private static readonly HttpClient HttpClient = new() { Timeout = TimeSpan.FromSeconds(15) };
 
@@ -46,6 +51,17 @@ public sealed class WebhookClient
                    (uids.Length > 0 || topicIds.Length > 0);
         }
 
+        if (target.IsFeishu)
+            return IsValidEndpoint(target.FeishuWebhookUrl);
+
+        if (target.IsTelegram)
+            return !string.IsNullOrWhiteSpace(target.TelegramBotToken) &&
+                   !string.IsNullOrWhiteSpace(target.TelegramChatId) &&
+                   IsValidEndpoint(target.TelegramApiUrl);
+
+        if (target.IsDiscord)
+            return IsValidEndpoint(target.DiscordWebhookUrl);
+
         return target.IsJsonWebhook && IsValidEndpoint(target.WebhookUrl);
     }
 
@@ -68,11 +84,21 @@ public sealed class WebhookClient
         if (!IsValidConfiguration(target))
             return new DeliveryResult(false, target.IsBark
                 ? "Invalid Bark configuration"
-                : target.IsWxPusher ? "Invalid WxPusher configuration" : "Invalid webhook URL", false);
+                : target.IsWxPusher ? "Invalid WxPusher configuration"
+                : target.IsFeishu ? "Invalid Feishu configuration"
+                : target.IsTelegram ? "Invalid Telegram configuration"
+                : target.IsDiscord ? "Invalid Discord configuration"
+                : "Invalid webhook URL", false);
 
         var uri = target.IsBark
             ? BuildBarkPushUri(target.BarkServerUrl)
-            : new Uri(target.IsWxPusher ? target.WxPusherApiUrl : target.WebhookUrl, UriKind.Absolute);
+            : target.IsWxPusher
+                ? new Uri(target.WxPusherApiUrl, UriKind.Absolute)
+                : target.IsFeishu
+                    ? new Uri(target.FeishuWebhookUrl, UriKind.Absolute)
+                    : target.IsTelegram
+                        ? BuildTelegramSendMessageUri(target)
+                        : new Uri(target.IsDiscord ? target.DiscordWebhookUrl : target.WebhookUrl, UriKind.Absolute);
 
         using var request = new HttpRequestMessage(HttpMethod.Post, uri)
         {
@@ -80,7 +106,13 @@ public sealed class WebhookClient
                 ? new StringContent(CreateBarkJson(target, payload), Encoding.UTF8, "application/json")
                 : target.IsWxPusher
                     ? new StringContent(CreateWxPusherJson(target, payload), Encoding.UTF8, "application/json")
-                    : new StringContent(JsonSerializer.Serialize(payload, AppJsonContext.Default.WebhookPayload), Encoding.UTF8, "application/json")
+                    : target.IsFeishu
+                        ? new StringContent(CreateFeishuJson(target, payload), Encoding.UTF8, "application/json")
+                        : target.IsTelegram
+                            ? new StringContent(CreateTelegramJson(target, payload), Encoding.UTF8, "application/json")
+                            : target.IsDiscord
+                                ? new StringContent(CreateDiscordJson(target, payload), Encoding.UTF8, "application/json")
+                                : new StringContent(JsonSerializer.Serialize(payload, AppJsonContext.Default.WebhookPayload), Encoding.UTF8, "application/json")
         };
         request.Headers.Add("X-WinToastRelay-Delivery", payload.DeliveryId);
         request.Headers.UserAgent.Add(new ProductInfoHeaderValue("WinToastRelay", "0.1"));
@@ -96,9 +128,13 @@ public sealed class WebhookClient
             if (!response.IsSuccessStatusCode)
                 return new DeliveryResult(false, $"HTTP {(int)response.StatusCode} {response.ReasonPhrase}", retryable);
 
-            return target.IsWxPusher
-                ? CreateWxPusherResult(await response.Content.ReadAsStringAsync(), CountWxPusherRecipients(target))
-                : new DeliveryResult(true, $"HTTP {(int)response.StatusCode} {response.ReasonPhrase}", false);
+            if (target.IsWxPusher)
+                return CreateWxPusherResult(await response.Content.ReadAsStringAsync(), CountWxPusherRecipients(target));
+            if (target.IsFeishu)
+                return CreateFeishuResult(await response.Content.ReadAsStringAsync());
+            if (target.IsTelegram)
+                return CreateTelegramResult(await response.Content.ReadAsStringAsync());
+            return new DeliveryResult(true, $"HTTP {(int)response.StatusCode} {response.ReasonPhrase}", false);
         }
         catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
         {
@@ -120,6 +156,14 @@ public sealed class WebhookClient
         if (!path.EndsWith("/push", StringComparison.OrdinalIgnoreCase))
             path += "/push";
         builder.Path = path;
+        return builder.Uri;
+    }
+
+    private static Uri BuildTelegramSendMessageUri(RelayDeliveryTarget target)
+    {
+        var builder = new UriBuilder(new Uri(target.TelegramApiUrl, UriKind.Absolute));
+        var path = builder.Path.TrimEnd('/');
+        builder.Path = $"{path}/bot{target.TelegramBotToken.Trim()}/sendMessage";
         return builder.Uri;
     }
 
@@ -183,6 +227,93 @@ public sealed class WebhookClient
         }
 
         return json.ToJsonString();
+    }
+
+    private static string CreateFeishuJson(RelayDeliveryTarget target, WebhookPayload payload)
+    {
+        var text = ComposeText(target.FeishuTitleTemplate, target.FeishuBodyTemplate, payload, FeishuTextCharacterLimit);
+        var json = new JsonObject
+        {
+            ["msg_type"] = "text",
+            ["content"] = new JsonObject { ["text"] = text }
+        };
+        if (!string.IsNullOrWhiteSpace(target.FeishuSecret))
+        {
+            var timestamp = DateTimeOffset.UtcNow.ToUnixTimeSeconds().ToString(CultureInfo.InvariantCulture);
+            var message = Encoding.UTF8.GetBytes($"{timestamp}\n{target.FeishuSecret}");
+            var key = Encoding.UTF8.GetBytes(target.FeishuSecret);
+            json["timestamp"] = timestamp;
+            json["sign"] = Convert.ToBase64String(HMACSHA256.HashData(key, message));
+        }
+        return json.ToJsonString();
+    }
+
+    private static string CreateTelegramJson(RelayDeliveryTarget target, WebhookPayload payload)
+    {
+        var json = new JsonObject
+        {
+            ["chat_id"] = target.TelegramChatId.Trim(),
+            ["text"] = ComposeText(target.TelegramTitleTemplate, target.TelegramBodyTemplate, payload, TelegramTextCharacterLimit),
+            ["disable_web_page_preview"] = true
+        };
+        if (!string.IsNullOrWhiteSpace(target.TelegramParseMode))
+            json["parse_mode"] = target.TelegramParseMode.Trim();
+        return json.ToJsonString();
+    }
+
+    private static string CreateDiscordJson(RelayDeliveryTarget target, WebhookPayload payload)
+    {
+        var json = new JsonObject
+        {
+            ["content"] = ComposeText(target.DiscordTitleTemplate, target.DiscordBodyTemplate, payload, DiscordTextCharacterLimit),
+            ["allowed_mentions"] = new JsonObject { ["parse"] = new JsonArray() }
+        };
+        if (!string.IsNullOrWhiteSpace(target.DiscordUsername))
+            json["username"] = target.DiscordUsername.Trim();
+        return json.ToJsonString();
+    }
+
+    private static string ComposeText(string titleTemplate, string bodyTemplate, WebhookPayload payload, int maxCharacters)
+    {
+        var title = ApplyTemplate(titleTemplate, payload, "{app}: {title}");
+        var body = ApplyTemplate(bodyTemplate, payload, "{body}");
+        var text = string.IsNullOrWhiteSpace(title) ? body : string.IsNullOrWhiteSpace(body) ? title : $"{title}\n{body}";
+        return TruncateCharacters(text, maxCharacters, ChannelTruncationSuffix);
+    }
+
+    private static DeliveryResult CreateFeishuResult(string responseBody)
+    {
+        if (string.IsNullOrWhiteSpace(responseBody)) return new DeliveryResult(true, "Feishu delivered", false);
+        try
+        {
+            using var json = JsonDocument.Parse(responseBody);
+            if (json.RootElement.TryGetProperty("code", out var code) && code.TryGetInt32(out var codeValue) && codeValue != 0)
+            {
+                var message = json.RootElement.TryGetProperty("msg", out var msg) ? msg.GetString() : null;
+                return new DeliveryResult(false, $"Feishu {codeValue}{(string.IsNullOrWhiteSpace(message) ? string.Empty : $" {message}")}", false);
+            }
+            return new DeliveryResult(true, "Feishu delivered", false);
+        }
+        catch (JsonException)
+        {
+            return new DeliveryResult(false, "Invalid Feishu response", true);
+        }
+    }
+
+    private static DeliveryResult CreateTelegramResult(string responseBody)
+    {
+        try
+        {
+            using var json = JsonDocument.Parse(responseBody);
+            if (json.RootElement.TryGetProperty("ok", out var ok) && ok.ValueKind == JsonValueKind.True)
+                return new DeliveryResult(true, "Telegram delivered", false);
+            var description = json.RootElement.TryGetProperty("description", out var descriptionElement) ? descriptionElement.GetString() : null;
+            return new DeliveryResult(false, $"Telegram failed{(string.IsNullOrWhiteSpace(description) ? string.Empty : $": {description}")}", false);
+        }
+        catch (JsonException)
+        {
+            return new DeliveryResult(false, "Invalid Telegram response", true);
+        }
     }
 
     private static DeliveryResult CreateWxPusherResult(string responseBody, int expectedRecipientCount)
@@ -324,17 +455,23 @@ public sealed class WebhookClient
             .Replace("{createdAt}", notification.CreatedAt.ToString("O"), StringComparison.OrdinalIgnoreCase);
     }
 
-    private static string TruncateCharacters(string value, int maxCharacters)
+    private static string TruncateCharacters(string value, int maxCharacters, string suffix = "")
     {
+        if (value.EnumerateRunes().Count() <= maxCharacters) return value;
+        if (string.IsNullOrEmpty(suffix)) suffix = string.Empty;
+        var suffixLength = suffix.EnumerateRunes().Count();
+        if (suffixLength >= maxCharacters)
+            return string.Concat(suffix.EnumerateRunes().Take(maxCharacters).Select(rune => rune.ToString()));
+
         var builder = new StringBuilder();
         var characterCount = 0;
         foreach (var rune in value.EnumerateRunes())
         {
-            if (characterCount == maxCharacters) break;
+            if (characterCount == maxCharacters - suffixLength) break;
             builder.Append(rune);
             characterCount++;
         }
-        return builder.ToString();
+        return builder.Append(suffix).ToString();
     }
 
     private static string[] ParseWxPusherValues(string values) => values

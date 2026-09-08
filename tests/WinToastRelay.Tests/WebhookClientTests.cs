@@ -324,4 +324,140 @@ public sealed class WebhookClientTests
         Assert.True(result.Retryable);
         Assert.Contains("expected 1 recipient results, received 0", result.Detail);
     }
+
+    [Fact]
+    public async Task DeliverAsync_FeishuMode_PostsSignedTextMessage()
+    {
+        using var listener = new HttpListener();
+        listener.Prefixes.Add("http://127.0.0.1:18772/");
+        listener.Start();
+
+        var requestTask = listener.GetContextAsync();
+        var payload = new WebhookPayload(
+            "notification.added",
+            "delivery-feishu",
+            new RelayNotification(12, "Calendar", "Meeting", "Starts soon", DateTimeOffset.Parse("2026-08-20T00:00:00Z")));
+        var target = new RelayDeliveryTarget(
+            RelayDeliveryTarget.FeishuMode,
+            string.Empty,
+            string.Empty,
+            string.Empty,
+            string.Empty,
+            string.Empty,
+            string.Empty,
+            string.Empty,
+            FeishuWebhookUrl: "http://127.0.0.1:18772/bot",
+            FeishuSecret: "feishu-secret",
+            FeishuTitleTemplate: "{app}: {title}",
+            FeishuBodyTemplate: "{body}");
+
+        var deliveryTask = new WebhookClient().DeliverAsync(target, payload);
+        var context = await requestTask;
+        using var reader = new StreamReader(context.Request.InputStream);
+        var body = await reader.ReadToEndAsync();
+        context.Response.StatusCode = (int)HttpStatusCode.OK;
+        var responseBytes = Encoding.UTF8.GetBytes("{\"code\":0,\"msg\":\"success\"}");
+        context.Response.ContentType = "application/json";
+        context.Response.ContentLength64 = responseBytes.Length;
+        await context.Response.OutputStream.WriteAsync(responseBytes);
+        context.Response.Close();
+
+        var result = await deliveryTask;
+
+        Assert.True(result.Succeeded);
+        Assert.Equal("delivery-feishu", context.Request.Headers["X-WinToastRelay-Delivery"]);
+        using var json = JsonDocument.Parse(body);
+        Assert.Equal("text", json.RootElement.GetProperty("msg_type").GetString());
+        Assert.Equal("Calendar: Meeting\nStarts soon", json.RootElement.GetProperty("content").GetProperty("text").GetString());
+        Assert.False(string.IsNullOrWhiteSpace(json.RootElement.GetProperty("timestamp").GetString()));
+        Assert.False(string.IsNullOrWhiteSpace(json.RootElement.GetProperty("sign").GetString()));
+    }
+
+    [Fact]
+    public async Task DeliverAsync_TelegramMode_PostsSendMessagePayload()
+    {
+        using var listener = new HttpListener();
+        listener.Prefixes.Add("http://127.0.0.1:18773/");
+        listener.Start();
+
+        var requestTask = listener.GetContextAsync();
+        var payload = new WebhookPayload(
+            "relay.test",
+            "delivery-telegram",
+            new RelayNotification(13, "Mail", "New message", "Read it", DateTimeOffset.Parse("2026-08-20T00:00:00Z")));
+        var target = new RelayDeliveryTarget(
+            RelayDeliveryTarget.TelegramMode,
+            string.Empty,
+            string.Empty,
+            string.Empty,
+            string.Empty,
+            string.Empty,
+            string.Empty,
+            string.Empty,
+            TelegramApiUrl: "http://127.0.0.1:18773",
+            TelegramBotToken: "123:ABC",
+            TelegramChatId: "-100123",
+            TelegramParseMode: "HTML");
+
+        var deliveryTask = new WebhookClient().DeliverAsync(target, payload);
+        var context = await requestTask;
+        using var reader = new StreamReader(context.Request.InputStream);
+        var body = await reader.ReadToEndAsync();
+        context.Response.StatusCode = (int)HttpStatusCode.OK;
+        var responseBytes = Encoding.UTF8.GetBytes("{\"ok\":true,\"result\":{}}");
+        context.Response.ContentType = "application/json";
+        context.Response.ContentLength64 = responseBytes.Length;
+        await context.Response.OutputStream.WriteAsync(responseBytes);
+        context.Response.Close();
+
+        var result = await deliveryTask;
+
+        Assert.True(result.Succeeded);
+        Assert.Equal("/bot123:ABC/sendMessage", context.Request.RawUrl?.Split('?')[0]);
+        using var json = JsonDocument.Parse(body);
+        Assert.Equal("-100123", json.RootElement.GetProperty("chat_id").GetString());
+        Assert.Equal("HTML", json.RootElement.GetProperty("parse_mode").GetString());
+        Assert.Equal("Mail: New message\nRead it", json.RootElement.GetProperty("text").GetString());
+    }
+
+    [Fact]
+    public async Task DeliverAsync_DiscordMode_PostsWebhookPayload()
+    {
+        using var listener = new HttpListener();
+        listener.Prefixes.Add("http://127.0.0.1:18774/");
+        listener.Start();
+
+        var requestTask = listener.GetContextAsync();
+        var payload = new WebhookPayload(
+            "relay.test",
+            "delivery-discord",
+            new RelayNotification(14, "Build", "Passed", "All checks passed", DateTimeOffset.Parse("2026-08-20T00:00:00Z")));
+        var target = new RelayDeliveryTarget(
+            RelayDeliveryTarget.DiscordMode,
+            string.Empty,
+            string.Empty,
+            string.Empty,
+            string.Empty,
+            string.Empty,
+            string.Empty,
+            string.Empty,
+            DiscordWebhookUrl: "http://127.0.0.1:18774/api/webhooks/test",
+            DiscordUsername: "Relay Bot");
+
+        var deliveryTask = new WebhookClient().DeliverAsync(target, payload);
+        var context = await requestTask;
+        using var reader = new StreamReader(context.Request.InputStream);
+        var body = await reader.ReadToEndAsync();
+        context.Response.StatusCode = (int)HttpStatusCode.NoContent;
+        context.Response.Close();
+
+        var result = await deliveryTask;
+
+        Assert.True(result.Succeeded);
+        Assert.Equal("delivery-discord", context.Request.Headers["X-WinToastRelay-Delivery"]);
+        using var json = JsonDocument.Parse(body);
+        Assert.Equal("Relay Bot", json.RootElement.GetProperty("username").GetString());
+        Assert.Equal("Build: Passed\nAll checks passed", json.RootElement.GetProperty("content").GetString());
+        Assert.Empty(json.RootElement.GetProperty("allowed_mentions").GetProperty("parse").EnumerateArray());
+    }
 }

@@ -7,15 +7,30 @@ public sealed class SecretStore
 {
     private const string ResourceName = "WinToastRelay.Webhook";
     private const string WebhookUserName = "Authorization";
+    private const string BarkDeviceKeyUserName = "BarkDeviceKey";
     private const string WxPusherUserName = "WxPusherAppToken";
+    private const string FeishuUserName = "FeishuSecret";
+    private const string TelegramUserName = "TelegramBotToken";
 
     public string Get() => Get(WebhookUserName);
+
+    public string GetBarkDeviceKey() => Get(BarkDeviceKeyUserName);
 
     public string GetWxPusherAppToken() => Get(WxPusherUserName);
 
     public void Save(string secret) => Save(WebhookUserName, secret);
 
+    public void SaveBarkDeviceKey(string secret) => Save(BarkDeviceKeyUserName, secret);
+
     public void SaveWxPusherAppToken(string secret) => Save(WxPusherUserName, secret);
+
+    public string GetFeishuSecret() => Get(FeishuUserName);
+
+    public void SaveFeishuSecret(string secret) => Save(FeishuUserName, secret);
+
+    public string GetTelegramBotToken() => Get(TelegramUserName);
+
+    public void SaveTelegramBotToken(string secret) => Save(TelegramUserName, secret);
 
     private static string Get(string userName)
     {

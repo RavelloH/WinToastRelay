@@ -32,11 +32,22 @@ public sealed class NotificationRelayService
     {
         _deliveryQueue.OutcomeReceived += (_, outcome) =>
         {
-            var channel = _target.IsBark ? "Bark" : _target.IsWxPusher ? "WxPusher" : "JSON Webhook";
+            var channel = _target.IsBark ? "Bark"
+                : _target.IsWxPusher ? "WxPusher"
+                : _target.IsFeishu ? "Feishu"
+                : _target.IsTelegram ? "Telegram"
+                : _target.IsDiscord ? "Discord"
+                : "JSON Webhook";
             var parameters = _target.IsBark
                 ? _target.BarkParameters.Replace("\r", " ").Replace("\n", "; ")
                 : _target.IsWxPusher
                     ? $"UIDs: {(string.IsNullOrWhiteSpace(_target.WxPusherUids) ? "none" : "configured")}; topics: {(string.IsNullOrWhiteSpace(_target.WxPusherTopicIds) ? "none" : "configured")}; app token: configured"
+                    : _target.IsFeishu
+                        ? $"Webhook: configured; secret: {(string.IsNullOrWhiteSpace(_target.FeishuSecret) ? "none" : "configured")}"
+                    : _target.IsTelegram
+                        ? $"Chat ID: configured; bot token: configured; parse mode: {(string.IsNullOrWhiteSpace(_target.TelegramParseMode) ? "plain text" : _target.TelegramParseMode)}"
+                    : _target.IsDiscord
+                        ? $"Webhook: configured; username: {(string.IsNullOrWhiteSpace(_target.DiscordUsername) ? "default" : _target.DiscordUsername)}"
                     : string.IsNullOrWhiteSpace(_target.BearerToken) ? "Bearer token: none" : "Bearer token: configured";
             ActivityReceived?.Invoke(this, new ActivityEntry(
                 DateTimeOffset.Now,
@@ -65,7 +76,11 @@ public sealed class NotificationRelayService
         if (!WebhookClient.IsValidConfiguration(_target))
             return new DeliveryResult(false, _target.IsBark
                 ? "Invalid Bark configuration"
-                : _target.IsWxPusher ? "Invalid WxPusher configuration" : "Invalid webhook URL");
+                : _target.IsWxPusher ? "Invalid WxPusher configuration"
+                : _target.IsFeishu ? "Invalid Feishu configuration"
+                : _target.IsTelegram ? "Invalid Telegram configuration"
+                : _target.IsDiscord ? "Invalid Discord configuration"
+                : "Invalid webhook URL");
 
         var access = await _listener.RequestAccessAsync();
         if (access != UserNotificationListenerAccessStatus.Allowed)

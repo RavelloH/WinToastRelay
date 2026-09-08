@@ -26,8 +26,9 @@ WinToastRelay uses `Windows.UI.Notifications.Management.UserNotificationListener
 * Chinese and English UI, switchable from Settings.
 * Bark delivery is the default, using JSON POST with configurable templates and arbitrary Bark parameters.
 * WxPusher standard push supports UID and Topic recipients with configurable summary and content templates.
+* Feishu custom bot, Telegram Bot API, and Discord Webhook delivery are supported with configurable templates.
 * HTTPS JSON webhook delivery remains available with an optional Bearer token (loopback HTTP is allowed for local development).
-* WxPusher AppToken and webhook Bearer token stored in Windows Credential Manager, not in the JSON settings file.
+* Delivery credentials, including the Bark device key, WxPusher AppToken, Feishu signing secret, Telegram Bot token, and webhook Bearer token, are stored in Windows Credential Manager, not in the JSON settings file.
 * Application allow-list filtering.
 * Delivery activity history with status and HTTP response details.
 * Durable local delivery queue with exponential backoff for transient HTTP failures.
@@ -85,7 +86,7 @@ Use the `.msix` and `.cer` from the same output directory. If Windows reports `0
 
 ### Bark (default)
 
-Enter a Bark server URL and device key. WinToastRelay sends a JSON POST request to the server's `/push` endpoint:
+Enter a Bark server URL and device key. The device key is stored in Windows Credential Manager rather than the JSON settings file. WinToastRelay sends a JSON POST request to the server's `/push` endpoint:
 
 ```json
 {
@@ -104,6 +105,18 @@ Title and body templates support `{app}`, `{title}`, `{body}`, `{id}`, `{eventTy
 Create an application in the WxPusher console, then enter its AppToken and at least one recipient UID or numeric Topic ID. UIDs and Topic IDs can be separated by new lines, commas, or semicolons. WinToastRelay sends plain-text messages through `POST https://wxpusher.zjiecode.com/api/send/message`; summary and content templates support the same variables as Bark.
 
 The AppToken is stored in Windows Credential Manager. A request is considered delivered only when the HTTP response succeeds, the top-level WxPusher business response code is `1000`, and every recipient result is successful. Configuration supports up to 2,000 UIDs and 5 Topic IDs per request; both recipient types may be used together. See the [WxPusher standard push API documentation](https://wxpusher.zjiecode.com/docs/api-reference.html) for application and recipient setup.
+
+### Feishu
+
+Create a custom bot in a Feishu group and paste its webhook URL. WinToastRelay sends a text message through the Feishu bot API. If signature verification is enabled, enter the bot secret; the request includes the standard `timestamp` and `sign` fields. The title and body templates support `{app}`, `{title}`, `{body}`, `{id}`, `{eventType}`, and `{createdAt}`.
+
+### Telegram
+
+Create a bot with BotFather, then enter its Bot token and destination Chat ID. WinToastRelay calls the Telegram Bot API `sendMessage` method and supports optional `HTML` or `MarkdownV2` parse modes, as well as a custom Bot API base URL for self-hosted deployments.
+
+### Discord
+
+Create a Discord channel webhook and paste its URL. WinToastRelay sends the rendered title and body as a webhook message, with unsolicited mentions disabled. An optional display name can be configured for the webhook message.
 
 ### Generic JSON webhook
 
@@ -125,7 +138,7 @@ The `X-WinToastRelay-Delivery` header contains the same delivery ID, making rece
 
 ## Privacy
 
-Delivery sends the visible notification text, source application display name, and creation time to the configured Bark, WxPusher, or JSON webhook destination. Review the destination's data retention and access policies before relaying sensitive notifications. The WxPusher AppToken and optional webhook Bearer token are stored only in Windows Credential Manager.
+Delivery sends the visible notification text, source application display name, and creation time to the configured Bark, WxPusher, Feishu, Telegram, Discord, or JSON webhook destination. Review the destination's data retention and access policies before relaying sensitive notifications. Delivery credentials, including the Bark device key, WxPusher AppToken, Feishu signing secret, Telegram Bot token, and optional webhook Bearer token, are stored only in Windows Credential Manager.
 
 ## License
 

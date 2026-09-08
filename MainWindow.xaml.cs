@@ -149,7 +149,8 @@ public sealed partial class MainWindow : Window
     {
         if (_isExiting) return;
         _isExiting = true;
-        _trayIcon.Dispose();
+        try { _trayIcon.Dispose(); }
+        catch { }
         await App.ShutdownAsync();
     }
 

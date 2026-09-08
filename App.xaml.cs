@@ -19,6 +19,7 @@ namespace WinToastRelay;
 public partial class App : Application
 {
     private const string MainInstanceKey = "WinToastRelay.Main";
+    private static readonly TimeSpan ShutdownTimeout = TimeSpan.FromSeconds(3);
     private static AppInstance? _mainInstance;
 
     public static NotificationRelayService RelayService { get; } = new();
@@ -47,7 +48,14 @@ public partial class App : Application
     {
         try
         {
-            await RelayService.StopAsync();
+            // Do not let a stalled network request or local file operation make the
+            // tray Exit command appear unresponsive. The queue is persisted after
+            // every enqueue/attempt, so a forced process exit is safe here.
+            await RelayService.StopAsync().WaitAsync(ShutdownTimeout);
+        }
+        catch (TimeoutException)
+        {
+            // Continue to process termination after the bounded graceful-shutdown window.
         }
         finally
         {
