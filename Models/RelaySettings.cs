@@ -6,6 +6,8 @@ public sealed class RelaySettings
     // Consent is scoped to one canonical endpoint for each channel, not a global HTTP bypass.
     public Dictionary<string, string> HttpEndpointApprovals { get; set; } = new();
     public string WebhookUrl { get; set; } = string.Empty;
+    public string WebhookJsonTemplate { get; set; } = string.Empty;
+    public string WebhookHeaders { get; set; } = string.Empty;
     public string BarkServerUrl { get; set; } = "https://api.day.app";
     // Legacy JSON field retained only so older settings files can be migrated to
     // Windows Credential Manager during startup. New writes always keep it empty.

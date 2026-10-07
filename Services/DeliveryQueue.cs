@@ -35,7 +35,7 @@ public sealed class DeliveryQueue : IAsyncDisposable
         CancellationTokenSource previousTarget;
         lock (_gate)
         {
-            if (_target == target) return;
+            if (_target.HasSameConfiguration(target)) return;
             _target = target;
             previousTarget = _targetChanged;
             _targetChanged = new CancellationTokenSource();

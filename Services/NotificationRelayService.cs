@@ -48,7 +48,7 @@ public sealed class NotificationRelayService
                         ? $"Chat ID: configured; bot token: configured; parse mode: {(string.IsNullOrWhiteSpace(_target.TelegramParseMode) ? "plain text" : _target.TelegramParseMode)}"
                     : _target.IsDiscord
                         ? $"Webhook: configured; username: {(string.IsNullOrWhiteSpace(_target.DiscordUsername) ? "default" : _target.DiscordUsername)}"
-                    : string.IsNullOrWhiteSpace(_target.BearerToken) ? "Bearer token: none" : "Bearer token: configured";
+                    : $"Payload: {(string.IsNullOrWhiteSpace(_target.WebhookJsonTemplate) ? "default JSON" : "custom JSON")}; custom headers: {(string.IsNullOrWhiteSpace(_target.WebhookHeaders) ? "none" : "configured")}; bearer token: {(string.IsNullOrWhiteSpace(_target.BearerToken) ? "none" : "configured")}";
             ActivityReceived?.Invoke(this, new ActivityEntry(
                 DateTimeOffset.Now,
                 outcome.Notification.App,
@@ -223,18 +223,27 @@ public sealed class NotificationRelayService
         }
     }
 
-    private static RelayNotification ToRelayNotification(UserNotification notification)
+    private static RelayNotification ToRelayNotification(UserNotification notification, bool includePackageName = true)
     {
         var app = notification.AppInfo.DisplayInfo.DisplayName;
         var binding = notification.Notification.Visual.GetBinding(KnownNotificationBindings.ToastGeneric);
         var parts = binding?.GetTextElements().Select(element => element.Text.Trim()).Where(text => text.Length > 0).ToArray() ?? [];
+        var packageName = string.Empty;
+        // AppInfo.Package was added in Windows 10 2004. Older Windows and
+        // unpackaged notification senders may not expose a package at all.
+        if (includePackageName && OperatingSystem.IsWindowsVersionAtLeast(10, 0, 19041) &&
+            Windows.Foundation.Metadata.ApiInformation.IsPropertyPresent("Windows.ApplicationModel.AppInfo", "Package"))
+        {
+            try { packageName = notification.AppInfo.Package?.Id.Name ?? string.Empty; }
+            catch (Exception) { /* Optional metadata must never block notification delivery. */ }
+        }
         return new RelayNotification(notification.Id, app, parts.ElementAtOrDefault(0) ?? string.Empty,
-            string.Join(Environment.NewLine, parts.Skip(1)), notification.CreationTime);
+            string.Join(Environment.NewLine, parts.Skip(1)), notification.CreationTime) { PackageName = packageName };
     }
 
     private static string Fingerprint(UserNotification notification)
     {
-        var value = ToRelayNotification(notification);
+        var value = ToRelayNotification(notification, includePackageName: false);
         return $"{value.App}\u001f{value.Title}\u001f{value.Body}\u001f{value.CreatedAt.UtcTicks}";
     }
 

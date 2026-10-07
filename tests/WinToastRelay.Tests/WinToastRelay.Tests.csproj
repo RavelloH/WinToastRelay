@@ -26,6 +26,7 @@
     <Compile Include="..\..\Models\RelaySettings.cs" Link="Models\RelaySettings.cs" />
     <Compile Include="..\..\Models\DeliveryStorageModels.cs" Link="Models\DeliveryStorageModels.cs" />
     <Compile Include="..\..\Services\WebhookClient.cs" Link="Services\WebhookClient.cs" />
+    <Compile Include="..\..\Services\GenericWebhookTemplate.cs" Link="Services\GenericWebhookTemplate.cs" />
   </ItemGroup>
 
 </Project>

@@ -29,7 +29,10 @@ public sealed record RelayDeliveryTarget(
     string DiscordUsername = "WinToastRelay",
     string DiscordTitleTemplate = "{app}: {title}",
     string DiscordBodyTemplate = "{body}",
-    string ApprovedHttpEndpoint = "")
+    string ApprovedHttpEndpoint = "",
+    string WebhookJsonTemplate = "",
+    string WebhookHeaders = "",
+    IReadOnlyDictionary<string, string>? WebhookSecrets = null)
 {
     public const string BarkMode = "bark";
     public const string JsonWebhookMode = "json";
@@ -44,4 +47,14 @@ public sealed record RelayDeliveryTarget(
     public bool IsFeishu => string.Equals(Mode, FeishuMode, StringComparison.OrdinalIgnoreCase);
     public bool IsTelegram => string.Equals(Mode, TelegramMode, StringComparison.OrdinalIgnoreCase);
     public bool IsDiscord => string.Equals(Mode, DiscordMode, StringComparison.OrdinalIgnoreCase);
+
+    public bool HasSameConfiguration(RelayDeliveryTarget other)
+    {
+        if ((this with { WebhookSecrets = null }) != (other with { WebhookSecrets = null })) return false;
+        if ((WebhookSecrets?.Count ?? 0) != (other.WebhookSecrets?.Count ?? 0)) return false;
+        return WebhookSecrets is null || WebhookSecrets.All(secret =>
+            other.WebhookSecrets is not null && other.WebhookSecrets.Any(candidate =>
+                string.Equals(secret.Key, candidate.Key, StringComparison.OrdinalIgnoreCase) &&
+                string.Equals(secret.Value, candidate.Value, StringComparison.Ordinal)));
+    }
 }

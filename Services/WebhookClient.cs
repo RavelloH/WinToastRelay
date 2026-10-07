@@ -68,7 +68,9 @@ public sealed class WebhookClient
         if (target.IsDiscord)
             return IsValidEndpoint(target.DiscordWebhookUrl, target.ApprovedHttpEndpoint);
 
-        return target.IsJsonWebhook && IsValidEndpoint(target.WebhookUrl, target.ApprovedHttpEndpoint);
+        return target.IsJsonWebhook &&
+               IsValidEndpoint(target.WebhookUrl, target.ApprovedHttpEndpoint) &&
+               string.IsNullOrEmpty(GenericWebhookTemplate.GetConfigurationError(target));
     }
 
     public static string GetConfigurationError(RelayDeliveryTarget target)
@@ -79,6 +81,12 @@ public sealed class WebhookClient
             EndpointTransportPolicy.RequiresHttpApproval(endpoint) &&
             !EndpointTransportPolicy.IsApproved(endpoint, target.ApprovedHttpEndpoint))
             return EndpointTransportPolicy.HttpApprovalRequired;
+
+        if (target.IsJsonWebhook && IsValidEndpoint(target.WebhookUrl, target.ApprovedHttpEndpoint))
+        {
+            var webhookError = GenericWebhookTemplate.GetConfigurationError(target);
+            if (!string.IsNullOrEmpty(webhookError)) return webhookError;
+        }
 
         return target.IsBark ? "Invalid Bark configuration"
             : target.IsWxPusher ? "Invalid WxPusher configuration"
@@ -105,9 +113,23 @@ public sealed class WebhookClient
     internal async Task<DeliveryResult> DeliverAsync(RelayDeliveryTarget target, WebhookPayload payload, CancellationToken cancellationToken)
     {
         cancellationToken.ThrowIfCancellationRequested();
-        var configurationError = GetConfigurationError(target);
-        if (!string.IsNullOrEmpty(configurationError))
-            return new DeliveryResult(false, configurationError, false);
+        string? genericWebhookJson = null;
+        IReadOnlyDictionary<string, string>? genericWebhookHeaders = null;
+        if (target.IsJsonWebhook)
+        {
+            if (!IsValidEndpoint(target.WebhookUrl, target.ApprovedHttpEndpoint))
+                return new DeliveryResult(false, GetConfigurationError(target), false);
+
+            if (!GenericWebhookTemplate.TryBuild(target, payload, redactSecrets: false,
+                    out genericWebhookJson, out genericWebhookHeaders, out var webhookError))
+                return new DeliveryResult(false, webhookError, false);
+        }
+        else
+        {
+            var configurationError = GetConfigurationError(target);
+            if (!string.IsNullOrEmpty(configurationError))
+                return new DeliveryResult(false, configurationError, false);
+        }
 
         var uri = target.IsBark
             ? BuildBarkPushUri(target.BarkServerUrl)
@@ -131,12 +153,17 @@ public sealed class WebhookClient
                             ? new StringContent(CreateTelegramJson(target, payload), Encoding.UTF8, "application/json")
                             : target.IsDiscord
                                 ? new StringContent(CreateDiscordJson(target, payload), Encoding.UTF8, "application/json")
-                                : new StringContent(JsonSerializer.Serialize(payload, AppJsonContext.Default.WebhookPayload), Encoding.UTF8, "application/json")
+                                : new StringContent(genericWebhookJson!, Encoding.UTF8, "application/json")
         };
         request.Headers.Add("X-WinToastRelay-Delivery", payload.DeliveryId);
         request.Headers.UserAgent.Add(new ProductInfoHeaderValue("WinToastRelay", "0.1"));
         if (target.IsJsonWebhook && !string.IsNullOrWhiteSpace(target.BearerToken))
             request.Headers.Authorization = new AuthenticationHeaderValue("Bearer", target.BearerToken);
+        if (genericWebhookHeaders is not null)
+        {
+            foreach (var (name, value) in genericWebhookHeaders)
+                request.Headers.Add(name, value);
+        }
 
         try
         {
@@ -146,8 +173,13 @@ public sealed class WebhookClient
             var retryable = response.StatusCode == System.Net.HttpStatusCode.RequestTimeout ||
                             response.StatusCode == System.Net.HttpStatusCode.TooManyRequests ||
                             (int)response.StatusCode >= 500;
+            // A generic receiver may echo credentials in arbitrary response
+            // text. Keep only its numeric status in persisted delivery details.
+            var httpDetail = target.IsJsonWebhook
+                ? $"HTTP {(int)response.StatusCode}"
+                : $"HTTP {(int)response.StatusCode} {response.ReasonPhrase}";
             if (!response.IsSuccessStatusCode)
-                return new DeliveryResult(false, $"HTTP {(int)response.StatusCode} {response.ReasonPhrase}", retryable);
+                return new DeliveryResult(false, httpDetail, retryable);
 
             if (target.IsWxPusher)
                 return CreateWxPusherResult(await response.Content.ReadAsStringAsync(), CountWxPusherRecipients(target));
@@ -155,7 +187,7 @@ public sealed class WebhookClient
                 return CreateFeishuResult(await response.Content.ReadAsStringAsync());
             if (target.IsTelegram)
                 return CreateTelegramResult(await response.Content.ReadAsStringAsync());
-            return new DeliveryResult(true, $"HTTP {(int)response.StatusCode} {response.ReasonPhrase}", false);
+            return new DeliveryResult(true, httpDetail, false);
         }
         catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
         {
@@ -163,7 +195,10 @@ public sealed class WebhookClient
         }
         catch (Exception ex) when (ex is HttpRequestException or TaskCanceledException)
         {
-            return new DeliveryResult(false, ex.Message, true);
+            var detail = target.IsJsonWebhook
+                ? ex is TaskCanceledException ? "Webhook request timed out" : "Webhook network request failed"
+                : ex.Message;
+            return new DeliveryResult(false, detail, true);
         }
     }
 

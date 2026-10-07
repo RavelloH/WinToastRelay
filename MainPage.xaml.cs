@@ -14,6 +14,7 @@ namespace WinToastRelay;
 public sealed partial class MainPage : Page
 {
     private bool _initializing;
+    private readonly HashSet<PasswordBox> _initializedWebhookSecretBoxes = [];
     public MainPageViewModel ViewModel { get; }
 
     public MainPage()
@@ -76,6 +77,33 @@ public sealed partial class MainPage : Page
     {
         if (sender is PasswordBox box)
             ViewModel.TelegramBotToken = box.Password;
+    }
+
+    private void WebhookSecretPasswordBox_Loaded(object sender, RoutedEventArgs e)
+    {
+        if (sender is PasswordBox box && box.DataContext is ViewModels.WebhookSecretOption option)
+        {
+            _initializedWebhookSecretBoxes.Remove(box);
+            box.Password = option.Value;
+            _initializedWebhookSecretBoxes.Add(box);
+        }
+    }
+
+    private void WebhookSecretPasswordBox_PasswordChanged(object sender, RoutedEventArgs e)
+    {
+        if (sender is PasswordBox box && _initializedWebhookSecretBoxes.Contains(box) && box.DataContext is ViewModels.WebhookSecretOption option)
+            option.Value = box.Password;
+    }
+
+    private void WebhookSecretPasswordBox_Unloaded(object sender, RoutedEventArgs e)
+    {
+        if (sender is PasswordBox box) _initializedWebhookSecretBoxes.Remove(box);
+    }
+
+    private void WebhookSecretRemove_Click(object sender, RoutedEventArgs e)
+    {
+        if (sender is Button button && button.DataContext is ViewModels.WebhookSecretOption option)
+            ViewModel.RemoveWebhookSecret(option);
     }
 
     private async void LanguageCombo_SelectionChanged(object sender, SelectionChangedEventArgs e)

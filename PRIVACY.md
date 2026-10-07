@@ -8,7 +8,7 @@ WinToastRelay is an open-source Windows application maintained by RavelloH. It l
 
 When notification access is granted, WinToastRelay can process the information exposed by a Windows notification, including:
 
-- the source application name and icon;
+- the source application name and icon, and its Windows package name when available;
 - the notification title and body;
 - the Windows notification identifier and event type; and
 - the notification creation time.
@@ -23,7 +23,9 @@ WinToastRelay does not send notification data to RavelloH, Microsoft, or an offi
 
 ## Credentials and local data
 
-The Bark device key, WxPusher AppToken, Feishu signing secret, Telegram Bot token, and optional webhook bearer token are stored using Windows Credential Manager. Other application settings, including destination URLs, recipient identifiers, delivery queue data, and the local delivery history are stored in the app's Windows local application data folder. These files remain on the device and are not uploaded by WinToastRelay except when their configured delivery operation requires it.
+The Bark device key, WxPusher AppToken, Feishu signing secret, Telegram Bot token, optional webhook bearer token, and named webhook secret variables are stored using Windows Credential Manager. Other application settings, including destination URLs, recipient identifiers, custom JSON templates, custom header definitions, delivery queue data, and the local delivery history are stored in the app's Windows local application data folder. These files remain on the device and are not uploaded by WinToastRelay except when their configured delivery operation requires it.
+
+Custom webhook templates and header values may reference notification fields and named secrets. Referenced values are included only in delivery requests to the configured destination; secret values are not stored in the delivery queue or history. The preview uses synthetic notification data and masks referenced secrets and custom header values. Text entered literally in a template or header definition is stored as an ordinary setting, so sensitive values should be entered as secret variables rather than pasted into templates or headers.
 
 The local delivery history is retained for the recent-history period shown by the application. Pending deliveries may remain in the local queue until they are delivered or marked as failed. You can remove the application or its local data using Windows settings.
 

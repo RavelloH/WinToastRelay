@@ -27,7 +27,7 @@ WinToastRelay uses `Windows.UI.Notifications.Management.UserNotificationListener
 * Bark delivery is the default, using JSON POST with configurable templates and arbitrary Bark parameters.
 * WxPusher standard push supports UID and Topic recipients with configurable summary and content templates.
 * Feishu custom bot, Telegram Bot API, and Discord Webhook delivery are supported with configurable templates.
-* JSON webhook delivery supports an optional Bearer token. HTTPS is the default; loopback HTTP remains allowed, and other HTTP endpoints require explicit approval for the current channel and URL.
+* JSON webhook delivery supports an optional Bearer token, custom JSON payload templates, custom HTTP headers, and credential-backed secret variables. HTTPS is the default; loopback HTTP remains allowed, and other HTTP endpoints require explicit approval for the current channel and URL.
 * Delivery credentials, including the Bark device key, WxPusher AppToken, Feishu signing secret, Telegram Bot token, and webhook Bearer token, are stored in Windows Credential Manager, not in the JSON settings file.
 * Application allow-list filtering.
 * Delivery activity history with status and HTTP response details.
@@ -126,6 +126,8 @@ Create a Discord channel webhook and paste its URL. WinToastRelay sends the rend
 
 ### Generic JSON webhook
 
+Leave the JSON template blank to keep the original payload below. Existing configurations continue to use this format:
+
 ```json
 {
   "eventType": "notification.added",
@@ -142,9 +144,65 @@ Create a Discord channel webhook and paste its URL. WinToastRelay sends the rend
 
 The `X-WinToastRelay-Delivery` header contains the same delivery ID, making receiver-side deduplication straightforward. Transient failures (timeouts, 429 responses, 5xx responses, and temporary WxPusher business errors) are persisted locally and retried with exponential backoff. Other failed responses are persisted as dead letters and reported in the activity view for the active session.
 
+#### Custom payloads and headers
+
+On **Destination → Generic JSON webhook**, expand the JSON template card and enter a valid JSON object. Placeholders are replaced in string values only, including strings nested in objects or arrays. Object keys and JSON numbers, booleans, and null values are not changed. Notification text is serialized safely: quotes, backslashes, newlines, and Unicode do not break the JSON structure. Substituted text is not interpreted as another template or executable code.
+
+Supported placeholders are case-insensitive:
+
+| Placeholder | Value |
+| --- | --- |
+| `{app}` | Source application's display name |
+| `{title}` | Notification title |
+| `{body}` or `{Content}` | Notification body |
+| `{PackageName}` | Windows package name, when available; otherwise empty |
+| `{id}` | Windows notification ID, as a string |
+| `{eventType}` | Event type, such as `notification.added` or `relay.test` |
+| `{createdAt}` | Notification creation time in ISO 8601 format |
+| `{deliveryId}` | Delivery ID |
+| `{secret:name}` | A named secret from Windows Credential Manager |
+
+Unrecognized placeholders and references to missing secrets are configuration errors. The template must be a JSON object, not a raw text body, array, or script. Placeholders must be inside JSON strings; write numeric values as JSON numbers when required by the receiving service.
+
+Add sensitive values under **Secret variables**, then reference them as `{secret:name}` in the JSON template or a header value. Secret names start with an ASCII letter and contain only letters, digits, underscores, or hyphens (up to 64 characters). Names are case-insensitive. Secret values are stored only in Windows Credential Manager; removing a secret and saving removes it from the saved secret collection. Ordinary template text and header definitions are stored in the settings file, so do not paste credentials directly into those editors. Up to 32 secret variables are supported.
+
+Custom headers use one `Name: Value` entry per line. For example:
+
+```text
+X-API-Key: {secret:api_key}
+Authorization: Bearer {secret:access_token}
+```
+
+You may use the built-in Bearer token field **or** a custom `Authorization` header, but not both. Duplicate headers, newline/control characters, non-ASCII header values, and transport-managed headers (including `Host`, `Content-*`, `Connection`, `Transfer-Encoding`, `User-Agent`, and `X-WinToastRelay-Delivery`) are rejected. The body is always sent as UTF-8 `application/json` with POST. Up to 32 custom headers are supported, with at most 8,192 characters per rendered value.
+
+**Preview** uses synthetic notification data and masks referenced secrets and custom header values. It does not send a request. **Send test** validates and sends the same configuration used by queued notifications. Generic webhook delivery considers HTTP 2xx successful; service-specific business response fields are not interpreted. JSON templates are limited to 65,536 characters and rendered bodies to 1 MiB; oversized generic bodies are rejected rather than silently truncating arbitrary fields.
+
+For [Pushover's JSON API](https://pushover.net/api), set the endpoint to `https://api.pushover.net/1/messages.json`, create secrets named `pushover_token` and `pushover_user`, and use:
+
+```json
+{
+  "token": "{secret:pushover_token}",
+  "user": "{secret:pushover_user}",
+  "title": "{title}",
+  "message": "{body}\n\nSource: {app}"
+}
+```
+
+For [ntfy JSON publishing](https://docs.ntfy.sh/publish/#publish-as-json), use the server's root URL (for example, `https://ntfy.sh/`, not a topic URL):
+
+```json
+{
+  "topic": "your-topic",
+  "title": "{title}",
+  "message": "{body}"
+}
+```
+
+If the service requires authentication, use its documented header format and a secret variable. The existing HTTPS/HTTP approval policy and redirect protection apply to both default and custom webhooks.
+
 ## Privacy
 
-Delivery sends the visible notification text, source application display name, and creation time to the configured Bark, WxPusher, Feishu, Telegram, Discord, or JSON webhook destination. Review the destination's data retention and access policies before relaying sensitive notifications. Delivery credentials, including the Bark device key, WxPusher AppToken, Feishu signing secret, Telegram Bot token, and optional webhook Bearer token, are stored only in Windows Credential Manager.
+Delivery sends the visible notification text, source application display name, and creation time to the configured Bark, WxPusher, Feishu, Telegram, Discord, or JSON webhook destination. Custom JSON templates can also include the Windows package name when available. Review the destination's data retention and access policies before relaying sensitive notifications. Delivery credentials, including the Bark device key, WxPusher AppToken, Feishu signing secret, Telegram Bot token, optional webhook Bearer token, and named webhook secrets, are stored only in Windows Credential Manager. Literal template text and header definitions are ordinary settings; use secret variables for sensitive values.
 
 ## License
 

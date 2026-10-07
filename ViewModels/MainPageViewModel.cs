@@ -15,16 +15,23 @@ public partial class MainPageViewModel : ObservableObject
     private readonly NotificationRelayService _relayService;
     private readonly StartupTaskService _startupTaskService = new();
     private RelaySettings _settings = new();
+    private RelayDeliveryTarget? _savedTarget;
     private const string ActivityFileName = "delivery-activity.json";
     private readonly SemaphoreSlim _applicationsLoadLock = new(1, 1);
     private readonly SemaphoreSlim _relayStartLock = new(1, 1);
     private bool _initialized;
     private bool _activityLoaded;
     private bool _applicationsLoaded;
+    private const int WebhookSecretLimit = 32;
     private string _statusSource = "尚未启动监听";
     private bool _isRefreshingHttpApprovalToggle;
+    private string _webhookValidationErrorSource = string.Empty;
 
     [ObservableProperty] public partial string WebhookUrl { get; set; } = string.Empty;
+    [ObservableProperty] public partial string WebhookJsonTemplate { get; set; } = string.Empty;
+    [ObservableProperty] public partial string WebhookHeaders { get; set; } = string.Empty;
+    [ObservableProperty] public partial string WebhookPreviewText { get; set; } = string.Empty;
+    [ObservableProperty] public partial string WebhookValidationError { get; set; } = string.Empty;
     [ObservableProperty] public partial string BearerToken { get; set; } = string.Empty;
     [ObservableProperty] public partial string DeliveryMode { get; set; } = RelayDeliveryTarget.BarkMode;
     [ObservableProperty] public partial string BarkServerUrl { get; set; } = "https://api.day.app";
@@ -69,6 +76,10 @@ public partial class MainPageViewModel : ObservableObject
         private set => SetProperty(ref _activity, value);
     }
     public ObservableCollection<NotificationApplicationOption> Applications { get; } = new();
+    public ObservableCollection<WebhookSecretOption> WebhookSecrets { get; } = new();
+    public Visibility WebhookPreviewVisibility => string.IsNullOrEmpty(WebhookPreviewText) ? Visibility.Collapsed : Visibility.Visible;
+    public Visibility WebhookValidationErrorVisibility => string.IsNullOrEmpty(WebhookValidationError) ? Visibility.Collapsed : Visibility.Visible;
+    public bool CanAddWebhookSecret => WebhookSecrets.Count < WebhookSecretLimit;
 
     public bool HasApplications => Applications.Count > 0;
     public Visibility ApplicationsVisibility => HasApplications ? Visibility.Visible : Visibility.Collapsed;
@@ -79,6 +90,7 @@ public partial class MainPageViewModel : ObservableObject
     public MainPageViewModel(NotificationRelayService relayService)
     {
         _relayService = relayService;
+        WebhookSecrets.CollectionChanged += (_, _) => OnPropertyChanged(nameof(CanAddWebhookSecret));
         _relayService.StatusChanged += (_, status) => SetStatus(status);
         _relayService.ActivityReceived += (_, entry) => AddActivity(entry);
         _relayService.ApplicationObserved += (_, app) => AddApplication(app);
@@ -137,6 +149,28 @@ public partial class MainPageViewModel : ObservableObject
     public string ConfigureDestinationLabel => IsChinese ? "配置通知通道" : "Configure destination";
     public string WebhookUrlLabel => IsChinese ? "Webhook 地址" : "Webhook URL";
     public string WebhookUrlPlaceholder => "https://example.com/hooks/wintoast";
+    public string WebhookJsonTemplateLabel => IsChinese ? "JSON 正文模板" : "JSON body template";
+    public string WebhookJsonTemplatePlaceholder => IsChinese ? "示例：{\"title\": \"{title}\", \"body\": \"{body}\"}" : "Example: {\"title\": \"{title}\", \"body\": \"{body}\"}";
+    public string WebhookJsonTemplateDescription => IsChinese
+        ? "留空时沿用原有通知 JSON 格式。自定义模板必须是 JSON 对象，只替换字符串值；可用变量：{app}、{title}、{body}、{Content}、{PackageName}、{id}、{eventType}、{createdAt}、{deliveryId}、{secret:NAME}。"
+        : "Leave empty to keep the existing notification JSON format. Custom templates must be JSON objects; variables replace string values only. Available: {app}, {title}, {body}, {Content}, {PackageName}, {id}, {eventType}, {createdAt}, {deliveryId}, {secret:NAME}.";
+    public string WebhookHeadersLabel => IsChinese ? "自定义请求头" : "Custom headers";
+    public string WebhookHeadersDescription => IsChinese
+        ? "每行填写 Name: Value，最多 32 项，值须为 ASCII 字符且不能含换行。变量可用于值中；敏感内容请引用下方密钥，例如 X-Api-Key: {secret:API_KEY}。不要填写 Host、Content-Type、Content-Length、连接类等传输头。"
+        : "Enter one Name: Value per line, up to 32 entries. Values must use ASCII without line breaks. Variables are supported in values; use a secret for sensitive values, for example X-Api-Key: {secret:API_KEY}. Do not set Host, Content-Type, Content-Length, or connection headers.";
+    public string WebhookSecretsLabel => IsChinese ? "密钥变量" : "Secret variables";
+    public string WebhookSecretsDescription => IsChinese
+        ? "密钥保存在 Windows 凭据管理器，不写入普通设置。名称以英文字母开头，后续可用字母、数字、下划线或连字符，最多 64 个字符。模板和请求头中的字面内容会保存在普通设置中；敏感值请放在这里。最多 32 项。"
+        : "Secrets are stored in Windows Credential Manager, not ordinary settings. Names start with an ASCII letter, then use letters, digits, underscores, or hyphens, up to 64 characters. Literal template and header text is saved in ordinary settings; put sensitive values here. Up to 32 entries.";
+    public string WebhookSecretNamePlaceholder => IsChinese ? "名称（例如 API_KEY）" : "Name (for example API_KEY)";
+    public string WebhookSecretValuePlaceholder => IsChinese ? "密钥值" : "Secret value";
+    public string AddWebhookSecretLabel => IsChinese ? "添加密钥" : "Add secret";
+    public string RemoveWebhookSecretLabel => IsChinese ? "移除" : "Remove";
+    public string PreviewWebhookLabel => IsChinese ? "预览示例" : "Preview sample";
+    public string WebhookPreviewLabel => IsChinese ? "示例预览（不发送）" : "Sample preview (not sent)";
+    public string WebhookBearerConflictHint => IsChinese
+        ? "自定义 Authorization 请求头不能与上方 Bearer Token 同时使用。预览会隐藏所有请求头值。"
+        : "A custom Authorization header cannot be combined with the Bearer token above. Header values are hidden in the preview.";
     public string DeliveryModeLabel => IsChinese ? "传递方式" : "Delivery mode";
     public string BarkModeLabel => IsChinese ? "Bark（推荐）" : "Bark (recommended)";
     public string WxPusherModeLabel => "WxPusher";
@@ -257,6 +291,11 @@ public partial class MainPageViewModel : ObservableObject
         OnPropertyChanged(nameof(RunningLabel));
     }
 
+    partial void OnWebhookPreviewTextChanged(string value) => OnPropertyChanged(nameof(WebhookPreviewVisibility));
+    partial void OnWebhookValidationErrorChanged(string value) => OnPropertyChanged(nameof(WebhookValidationErrorVisibility));
+    partial void OnWebhookJsonTemplateChanged(string value) => InvalidateWebhookPreview();
+    partial void OnWebhookHeadersChanged(string value) => InvalidateWebhookPreview();
+
     partial void OnDeliveryModeChanged(string value)
     {
         OnPropertyChanged(nameof(BarkVisibility));
@@ -320,6 +359,9 @@ public partial class MainPageViewModel : ObservableObject
     partial void OnIsChineseChanged(bool value)
     {
         OnPropertyChanged(string.Empty);
+        foreach (var option in WebhookSecrets) UpdateWebhookSecretLabels(option);
+        if (!string.IsNullOrEmpty(_webhookValidationErrorSource))
+            WebhookValidationError = LocalizeWebhookValidationError(_webhookValidationErrorSource);
         // StatusDetail stores the last message in its source language. Re-localize it when
         // the user switches languages so a previously shown Chinese status cannot remain on
         // the English home page (and vice versa).
@@ -368,6 +410,11 @@ public partial class MainPageViewModel : ObservableObject
         DiscordUsername = _settings.DiscordUsername;
         DiscordTitleTemplate = _settings.DiscordTitleTemplate;
         DiscordBodyTemplate = _settings.DiscordBodyTemplate;
+        WebhookJsonTemplate = _settings.WebhookJsonTemplate;
+        WebhookHeaders = _settings.WebhookHeaders;
+        WebhookSecrets.Clear();
+        foreach (var secret in _secretStore.GetWebhookSecrets())
+            WebhookSecrets.Add(CreateWebhookSecretOption(secret.Key, secret.Value));
         if (!BarkParameters.Contains("icon=", StringComparison.OrdinalIgnoreCase))
             BarkParameters = string.IsNullOrWhiteSpace(BarkParameters)
                 ? "level=active\nicon=https://raw.ravelloh.com/icon/WinToastRelay.png"
@@ -382,8 +429,9 @@ public partial class MainPageViewModel : ObservableObject
         RelayManuallyStopped = _settings.RelayManuallyStopped;
         StartWithWindows = await startupTask;
         _settings.ApplicationFilterEnabled |= ParseAllowedApplications().Count > 0;
-        _relayService.Configure(CreateTarget(), AllowedApplications, _settings.ApplicationFilterEnabled);
-        IsDestinationConfigured = WebhookClient.IsValidConfiguration(CreateTarget());
+        _savedTarget = CreateTarget();
+        _relayService.Configure(GetSavedTarget(), AllowedApplications, _settings.ApplicationFilterEnabled);
+        IsDestinationConfigured = WebhookClient.IsValidConfiguration(GetSavedTarget());
 
         _initialized = true;
         RefreshHttpApprovalToggle();
@@ -422,7 +470,7 @@ public partial class MainPageViewModel : ObservableObject
             IsBusy = true;
             try
             {
-                var target = CreateTarget();
+                var target = GetSavedTarget();
                 if (!WebhookClient.IsValidConfiguration(target))
                 {
                     if (_relayService.IsRunning) await _relayService.StopAsync();
@@ -444,7 +492,7 @@ public partial class MainPageViewModel : ObservableObject
                     return;
                 }
 
-                _relayService.Configure(CreateTarget(), AllowedApplications, _settings.ApplicationFilterEnabled);
+                _relayService.Configure(target, AllowedApplications, _settings.ApplicationFilterEnabled);
                 var result = await _relayService.StartAsync();
                 IsRelayRunning = result.Succeeded;
                 if (result.Succeeded) RelayManuallyStopped = false;
@@ -467,34 +515,203 @@ public partial class MainPageViewModel : ObservableObject
     [RelayCommand]
     private async Task SaveSettingsAsync()
     {
-        await SaveConfigurationAsync();
-        await StartRelayAutomaticallyAsync();
-        if (WebhookClient.GetConfigurationError(CreateTarget()) == EndpointTransportPolicy.HttpApprovalRequired) return;
-        SetStatus(IsChinese ? "设置已保存" : "Settings saved");
+        if (!TryValidateWebhookSettings()) return;
+        try
+        {
+            if (!await SaveConfigurationAsync()) return;
+            await StartRelayAutomaticallyAsync();
+            if (WebhookClient.GetConfigurationError(GetSavedTarget()) == EndpointTransportPolicy.HttpApprovalRequired) return;
+            SetStatus(IsChinese ? "设置已保存" : "Settings saved");
+        }
+        catch (Exception)
+        {
+            if (!IsJsonWebhookMode) throw;
+            SetWebhookValidationError("Webhook save failed");
+        }
     }
 
     [RelayCommand]
     private async Task TestWebhookAsync()
     {
-        await SaveConfigurationAsync();
-        _relayService.Configure(CreateTarget(), AllowedApplications, _settings.ApplicationFilterEnabled);
-        IsDestinationConfigured = WebhookClient.IsValidConfiguration(CreateTarget());
-        var result = await _relayService.SendTestAsync();
-        var resultDetail = LocalizeStatus(result.Detail);
-        SetStatus(result.Succeeded ? (IsChinese ? "测试发送成功" : "Test delivered") : result.Detail);
-        AddActivity(new ActivityEntry(
-            DateTimeOffset.Now,
-            "WinToastRelay",
-            IsChinese ? "测试发送" : "Test delivery",
-            result.Succeeded,
-            resultDetail) { Body = IsChinese ? "你的通知通道连接正常。" : "Your notification destination is working." });
+        if (!TryValidateWebhookSettings()) return;
+        try
+        {
+            if (!await SaveConfigurationAsync()) return;
+            _relayService.Configure(GetSavedTarget(), AllowedApplications, _settings.ApplicationFilterEnabled);
+            IsDestinationConfigured = WebhookClient.IsValidConfiguration(GetSavedTarget());
+            var result = await _relayService.SendTestAsync();
+            var resultDetail = LocalizeStatus(result.Detail);
+            SetStatus(result.Succeeded ? (IsChinese ? "测试发送成功" : "Test delivered") : result.Detail);
+            AddActivity(new ActivityEntry(
+                DateTimeOffset.Now,
+                "WinToastRelay",
+                IsChinese ? "测试发送" : "Test delivery",
+                result.Succeeded,
+                resultDetail) { Body = result.Succeeded
+                    ? (IsChinese ? "你的通知通道连接正常。" : "Your notification destination is working.")
+                    : (IsChinese ? "测试请求未能送达。" : "The test request was not delivered.") });
+        }
+        catch (Exception)
+        {
+            if (!IsJsonWebhookMode) throw;
+            SetWebhookValidationError("Webhook test failed");
+        }
+    }
+
+    [RelayCommand]
+    private void AddWebhookSecret()
+    {
+        if (!CanAddWebhookSecret) return;
+        WebhookSecrets.Add(CreateWebhookSecretOption());
+    }
+
+    public void RemoveWebhookSecret(WebhookSecretOption? option)
+    {
+        if (option is null || !WebhookSecrets.Remove(option)) return;
+        InvalidateWebhookPreview();
+        OnPropertyChanged(nameof(CanAddWebhookSecret));
+    }
+
+    [RelayCommand]
+    private void PreviewWebhook()
+    {
+        WebhookPreviewText = string.Empty;
+        if (!TryValidateWebhookSettings()) return;
+
+        try
+        {
+            var sample = new WebhookPayload(
+                "sample.event",
+                "sample-delivery-id",
+                new RelayNotification(123, "Example app", "Sample title", "This is a sample notification preview.", new DateTimeOffset(2025, 1, 2, 3, 4, 0, TimeSpan.Zero))
+                { PackageName = "example.package" });
+            if (!GenericWebhookTemplate.TryBuild(CreateTarget(), sample, redactSecrets: true, out var json, out var headers, out var error))
+            {
+                SetWebhookValidationError(error);
+                return;
+            }
+
+            var headerPreview = headers.Count == 0
+                ? (IsChinese ? "（无）" : "(none)")
+                : string.Join(Environment.NewLine, headers.Keys.Select(name => $"{name}: ••••••••"));
+            WebhookPreviewText = $"JSON{Environment.NewLine}{json}{Environment.NewLine}{Environment.NewLine}{(IsChinese ? "请求头（值已隐藏）" : "Headers (values hidden)")}{Environment.NewLine}{headerPreview}";
+        }
+        catch (Exception)
+        {
+            SetWebhookValidationError("Webhook preview failed");
+        }
+    }
+
+    private bool TryValidateWebhookSettings()
+    {
+        ClearWebhookValidationError();
+        if (!string.Equals(NormalizeDeliveryMode(DeliveryMode), RelayDeliveryTarget.JsonWebhookMode, StringComparison.OrdinalIgnoreCase))
+            return true;
+
+        if (!TryValidateWebhookSecretRows()) return false;
+
+        string error;
+        try { error = GenericWebhookTemplate.GetConfigurationError(CreateTarget()); }
+        catch (Exception) { error = "Invalid webhook JSON template"; }
+        if (IsWebhookTemplateError(error))
+        {
+            SetWebhookValidationError(error);
+            return false;
+        }
+        return true;
+    }
+
+    private bool TryValidateWebhookSecretRows(bool showError = true)
+    {
+        string? error = null;
+        if (WebhookSecrets.Count > WebhookSecretLimit)
+            error = "Too many webhook secrets";
+        else
+        {
+            var names = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+            foreach (var option in WebhookSecrets)
+            {
+                var name = option.Name.Trim();
+                if (!GenericWebhookTemplate.IsValidSecretName(name))
+                {
+                    error = "Invalid webhook secret name";
+                    break;
+                }
+                if (!names.Add(name))
+                {
+                    error = "Duplicate webhook secret name";
+                    break;
+                }
+                if (string.IsNullOrEmpty(option.Value))
+                {
+                    error = "Missing webhook secret value";
+                    break;
+                }
+            }
+        }
+
+        if (error is null) return true;
+        if (showError) SetWebhookValidationError(error);
+        return false;
+    }
+
+    private static bool IsWebhookTemplateError(string error) => error is
+        "Invalid webhook JSON template" or
+        "Invalid webhook headers" or
+        "Missing webhook secret" or
+        "Unknown webhook template variable" or
+        "Conflicting webhook authorization" or
+        "Webhook payload too large";
+
+    private string LocalizeWebhookValidationError(string error) => error switch
+    {
+        "Invalid webhook JSON template" => IsChinese ? "JSON 模板无效。请使用 JSON 对象，并检查其中的变量。" : "The JSON template is invalid. Use a JSON object and check its variables.",
+        "Invalid webhook headers" => IsChinese ? "请求头格式无效。请按每行 Name: Value 填写。" : "The headers are invalid. Enter one Name: Value pair per line.",
+        "Missing webhook secret" => IsChinese ? "模板引用的密钥不存在或没有值。" : "A referenced secret is missing or has no value.",
+        "Unknown webhook template variable" => IsChinese ? "模板包含未知变量。请检查可用变量列表。" : "The template contains an unknown variable. Check the available variables.",
+        "Conflicting webhook authorization" => IsChinese ? "Authorization 请求头不能与 Bearer Token 同时使用。" : "A custom Authorization header cannot be combined with the Bearer token.",
+        "Webhook payload too large" => IsChinese ? "生成的 Webhook 正文超过大小限制。" : "The generated webhook body exceeds the size limit.",
+        "Invalid webhook secret name" => IsChinese ? "密钥名称无效。名称须以英文字母开头，并且最多 64 个字符。" : "A secret name is invalid. Names must start with an ASCII letter and be at most 64 characters.",
+        "Duplicate webhook secret name" => IsChinese ? "密钥名称不能重复（不区分大小写）。" : "Secret names must be unique, ignoring case.",
+        "Missing webhook secret value" => IsChinese ? "每个密钥变量都需要填写值，或移除空白行。" : "Every secret variable needs a value, or remove the empty row.",
+        "Too many webhook secrets" => IsChinese ? "密钥变量最多只能有 32 项。" : "You can configure at most 32 secret variables.",
+        "Webhook save failed" => IsChinese ? "设置保存失败。请检查 Windows 凭据管理器访问权限后重试。" : "Settings could not be saved. Check access to Windows Credential Manager and try again.",
+        "Webhook test failed" => IsChinese ? "无法保存或发送测试请求。请检查配置和凭据管理器访问权限。" : "The settings could not be saved or the test request could not be sent. Check the configuration and Credential Manager access.",
+        "Webhook preview failed" => IsChinese ? "无法生成预览。请检查模板和请求头格式。" : "The preview could not be generated. Check the template and header format.",
+        _ => IsChinese ? "Webhook 配置无效。请检查模板、请求头和密钥变量。" : "The webhook configuration is invalid. Check the template, headers, and secret variables."
+    };
+
+    private void SetWebhookValidationError(string error)
+    {
+        _webhookValidationErrorSource = error;
+        WebhookValidationError = LocalizeWebhookValidationError(error);
+        SetStatus("Webhook validation error");
+    }
+
+    private void ClearWebhookValidationError()
+    {
+        _webhookValidationErrorSource = string.Empty;
+        WebhookValidationError = string.Empty;
+        if (string.Equals(_statusSource, "Webhook validation error", StringComparison.Ordinal))
+            SetStatus(IsRelayRunning ? "Listening for Windows notifications" : "Not listening yet");
+    }
+
+    private void InvalidateWebhookPreview()
+    {
+        WebhookPreviewText = string.Empty;
+        ClearWebhookValidationError();
     }
 
     [RelayCommand]
     private async Task ToggleLanguageAsync()
     {
         IsChinese = !IsChinese;
-        await SaveConfigurationAsync();
+        _settings.Language = IsChinese ? "zh-CN" : "en-US";
+        try { await _settingsStore.SaveAsync(_settings); }
+        catch (Exception)
+        {
+            SetStatus("Language preference save failed");
+        }
     }
 
     [RelayCommand]
@@ -512,9 +729,27 @@ public partial class MainPageViewModel : ObservableObject
             : (IsChinese ? "已关闭登录启动" : "Start with Windows disabled"));
     }
 
-    private async Task SaveConfigurationAsync()
+    private async Task<bool> SaveConfigurationAsync()
     {
+        if (IsJsonWebhookMode && !TryValidateWebhookSettings()) return false;
+        var canSaveWebhookSecrets = TryValidateWebhookSecretRows(showError: IsJsonWebhookMode);
+        // Capture the validated draft before any asynchronous writes. Later
+        // keystrokes must not silently become the live transport configuration.
+        var target = CreateTarget();
+
+        // Finish credential writes before mutating the ordinary settings cache,
+        // so a failed vault write cannot be persisted by an incidental filter save.
+        if (canSaveWebhookSecrets)
+            _secretStore.SaveWebhookSecrets(target.WebhookSecrets!);
+        _secretStore.Save(target.BearerToken);
+        _secretStore.SaveBarkDeviceKey(target.BarkDeviceKey);
+        _secretStore.SaveWxPusherAppToken(target.WxPusherAppToken);
+        _secretStore.SaveFeishuSecret(target.FeishuSecret);
+        _secretStore.SaveTelegramBotToken(target.TelegramBotToken);
+
         _settings.WebhookUrl = WebhookUrl.Trim();
+        _settings.WebhookJsonTemplate = WebhookJsonTemplate;
+        _settings.WebhookHeaders = WebhookHeaders;
         _settings.DeliveryMode = NormalizeDeliveryMode(DeliveryMode);
         _settings.BarkServerUrl = BarkServerUrl.Trim();
         // Bark's device key is a credential, not a regular application setting.
@@ -542,13 +777,22 @@ public partial class MainPageViewModel : ObservableObject
         _settings.Language = IsChinese ? "zh-CN" : "en-US";
         _settings.RelayEnabled = IsRelayRunning;
         _settings.StartWithWindows = StartWithWindows;
-        _secretStore.Save(BearerToken.Trim());
-        _secretStore.SaveBarkDeviceKey(BarkDeviceKey.Trim());
-        _secretStore.SaveWxPusherAppToken(WxPusherAppToken.Trim());
-        _secretStore.SaveFeishuSecret(FeishuSecret.Trim());
-        _secretStore.SaveTelegramBotToken(TelegramBotToken.Trim());
         await _settingsStore.SaveAsync(_settings);
-        _relayService.Configure(CreateTarget(), AllowedApplications, _settings.ApplicationFilterEnabled);
+        _savedTarget = target;
+        _relayService.Configure(GetSavedTarget(), AllowedApplications, _settings.ApplicationFilterEnabled);
+        return true;
+    }
+
+    private RelayDeliveryTarget GetSavedTarget()
+    {
+        var target = _savedTarget ?? CreateTarget();
+        // HTTP revocation is an immediate security operation, independent of
+        // whether unrelated template/header/secret drafts are valid or saved.
+        return target with
+        {
+            ApprovedHttpEndpoint = _settings.GetHttpEndpointApproval(
+                target.Mode, EndpointTransportPolicy.GetConfiguredEndpoint(target))
+        };
     }
 
     private RelayDeliveryTarget CreateTarget() => new(
@@ -579,7 +823,40 @@ public partial class MainPageViewModel : ObservableObject
         DiscordUsername: DiscordUsername.Trim(),
         DiscordTitleTemplate: DiscordTitleTemplate,
         DiscordBodyTemplate: DiscordBodyTemplate,
-        ApprovedHttpEndpoint: _settings.GetHttpEndpointApproval(DeliveryMode, GetCurrentEndpoint()));
+        ApprovedHttpEndpoint: _settings.GetHttpEndpointApproval(DeliveryMode, GetCurrentEndpoint()),
+        WebhookJsonTemplate: WebhookJsonTemplate,
+        WebhookHeaders: WebhookHeaders,
+        WebhookSecrets: CreateWebhookSecrets());
+
+    private Dictionary<string, string> CreateWebhookSecrets()
+    {
+        var secrets = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
+        foreach (var option in WebhookSecrets)
+        {
+            var name = option.Name.Trim();
+            if (name.Length > 0 && !secrets.ContainsKey(name)) secrets.Add(name, option.Value);
+        }
+        return secrets;
+    }
+
+    private WebhookSecretOption CreateWebhookSecretOption(string name = "", string value = "")
+    {
+        var option = new WebhookSecretOption { Name = name, Value = value };
+        UpdateWebhookSecretLabels(option);
+        option.PropertyChanged += (_, args) =>
+        {
+            if (args.PropertyName is nameof(WebhookSecretOption.Name) or nameof(WebhookSecretOption.Value))
+                InvalidateWebhookPreview();
+        };
+        return option;
+    }
+
+    private void UpdateWebhookSecretLabels(WebhookSecretOption option)
+    {
+        option.NamePlaceholder = WebhookSecretNamePlaceholder;
+        option.ValuePlaceholder = WebhookSecretValuePlaceholder;
+        option.RemoveLabel = RemoveWebhookSecretLabel;
+    }
 
     private string GetCurrentEndpoint() => NormalizeDeliveryMode(DeliveryMode) switch
     {
@@ -590,6 +867,8 @@ public partial class MainPageViewModel : ObservableObject
         RelayDeliveryTarget.DiscordMode => DiscordWebhookUrl,
         _ => BarkServerUrl
     };
+
+    private bool IsJsonWebhookMode => string.Equals(NormalizeDeliveryMode(DeliveryMode), RelayDeliveryTarget.JsonWebhookMode, StringComparison.OrdinalIgnoreCase);
 
     private string GetCurrentChannelLabel() => NormalizeDeliveryMode(DeliveryMode) switch
     {
@@ -640,7 +919,7 @@ public partial class MainPageViewModel : ObservableObject
 
     private void RefreshDestinationAfterPolicyChange()
     {
-        var target = CreateTarget();
+        var target = GetSavedTarget();
         _relayService.Configure(target, AllowedApplications, _settings.ApplicationFilterEnabled);
         IsDestinationConfigured = WebhookClient.IsValidConfiguration(target);
         if (WebhookClient.GetConfigurationError(target) == EndpointTransportPolicy.HttpApprovalRequired)
@@ -651,11 +930,17 @@ public partial class MainPageViewModel : ObservableObject
     {
         try
         {
-            await SaveConfigurationAsync();
+            if (!await SaveConfigurationAsync())
+            {
+                // Revocation must stop an unapproved live target even when an
+                // unrelated unfinished editor prevents saving the full draft.
+                await RecheckRelayAfterHttpPolicyChangeAsync();
+                return;
+            }
         }
-        catch (Exception ex)
+        catch (Exception)
         {
-            SetStatus(IsChinese ? $"保存 HTTP 授权失败：{ex.Message}" : $"Failed to save HTTP approval: {ex.Message}");
+            SetStatus(IsChinese ? "保存 HTTP 授权失败，请检查凭据管理器和应用数据访问权限。" : "Failed to save HTTP approval. Check access to Credential Manager and app data.");
             if (isAllowed) return;
         }
         await RecheckRelayAfterHttpPolicyChangeAsync();
@@ -708,6 +993,14 @@ public partial class MainPageViewModel : ObservableObject
 
     private void AddActivity(ActivityEntry entry)
     {
+        if (IsJsonWebhookMode && !entry.Succeeded)
+        {
+            entry = entry with
+            {
+                Detail = IsChinese ? "通用 Webhook 传递失败。请检查目标服务状态。" : "Generic webhook delivery failed. Check the destination service status."
+            };
+        }
+
         void Add()
         {
             Activity.Insert(0, entry);
@@ -792,12 +1085,25 @@ public partial class MainPageViewModel : ObservableObject
     {
         AllowedApplications = string.Join(Environment.NewLine, Applications.Where(item => item.IsEnabled).Select(item => item.Name));
         _settings.ApplicationFilterEnabled = Applications.Any(item => !item.IsEnabled);
-        _relayService.Configure(CreateTarget(), AllowedApplications, _settings.ApplicationFilterEnabled);
-        _ = SaveConfigurationAsync();
+        _settings.AllowedApplications = AllowedApplications;
+        _relayService.Configure(GetSavedTarget(), AllowedApplications, _settings.ApplicationFilterEnabled);
+        _ = SaveApplicationFiltersAsync();
+    }
+
+    private async Task SaveApplicationFiltersAsync()
+    {
+        try { await _settingsStore.SaveAsync(_settings); }
+        catch (Exception)
+        {
+            SetStatus(IsChinese ? "应用筛选设置保存失败，请重试。" : "Application filters could not be saved. Please try again.");
+        }
     }
 
     private string LocalizeStatus(string status) => status switch
     {
+        _ when IsWebhookTemplateError(status) => LocalizeWebhookValidationError(status),
+        "Webhook request timed out" => IsChinese ? "Webhook 请求超时，将按重试策略处理。" : "The webhook request timed out and is eligible for retry.",
+        "Webhook network request failed" => IsChinese ? "Webhook 网络请求失败，请检查网络和目标服务。" : "The webhook network request failed. Check the network and destination service.",
         EndpointTransportPolicy.HttpApprovalRequired => IsChinese ? "请为此地址启用“允许未加密 HTTP”" : "Enable Allow unencrypted HTTP for this destination",
         "请为此地址启用“允许未加密 HTTP”" or "Enable Allow unencrypted HTTP for this destination" =>
             IsChinese ? "请为此地址启用“允许未加密 HTTP”" : "Enable Allow unencrypted HTTP for this destination",
@@ -810,6 +1116,10 @@ public partial class MainPageViewModel : ObservableObject
         "Relay paused" or "转发已暂停" => IsChinese ? "转发已暂停" : "Relay paused",
         "转发已停止" or "Relay stopped" => IsChinese ? "转发已停止" : "Relay stopped",
         "通知监听已自动启动" or "Notification listening started automatically" => IsChinese ? "通知监听已自动启动" : "Notification listening started automatically",
+        "Webhook validation error" => string.IsNullOrEmpty(_webhookValidationErrorSource)
+            ? (IsChinese ? "Webhook 配置无效。请检查通知通道设置。" : "Webhook configuration is invalid. Check the destination settings.")
+            : LocalizeWebhookValidationError(_webhookValidationErrorSource),
+        "Language preference save failed" => IsChinese ? "语言设置保存失败。" : "The language preference could not be saved.",
         "请先完成通知通道配置，保存后将自动开始监听" or "Complete the destination configuration; listening starts automatically after saving" => IsChinese
             ? "请先完成通知通道配置，保存后将自动开始监听"
             : "Complete the destination configuration; listening starts automatically after saving",
