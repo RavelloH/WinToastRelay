@@ -1,5 +1,6 @@
 using System.Text.Json;
 using System.Threading.Channels;
+using System.Runtime.ExceptionServices;
 using WinToastRelay.Models;
 
 namespace WinToastRelay.Services;
@@ -81,16 +82,26 @@ public sealed class DeliveryQueue : IAsyncDisposable
     public async Task StopAsync()
     {
         if (!_started) return;
-        _shutdown.Cancel();
+        Exception? failure = null;
+        try { _shutdown.Cancel(); }
+        catch (Exception ex) { failure = ex; }
         Signal();
         if (_worker is not null)
         {
             try { await _worker; }
             catch (OperationCanceledException) { }
+            catch (Exception ex) { failure ??= ex; }
         }
-        await SaveAsync();
-        _started = false;
-        _worker = null;
+        try { await SaveAsync(); }
+        catch (Exception ex) { failure ??= ex; }
+        finally
+        {
+            // A faulted worker or inaccessible storage must not leave the queue
+            // marked as started forever and prevent the next manual retry.
+            _started = false;
+            _worker = null;
+        }
+        if (failure is not null) ExceptionDispatchInfo.Capture(failure).Throw();
     }
 
     public async ValueTask DisposeAsync()

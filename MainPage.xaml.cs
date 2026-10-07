@@ -123,6 +123,11 @@ public sealed partial class MainPage : Page
     private async void RelayToggle_Toggled(object sender, RoutedEventArgs e)
     {
         if (_initializing || sender is not ToggleSwitch toggle || toggle.IsOn == ViewModel.IsRelayRunning) return;
+        if (!ViewModel.CanToggleRelay)
+        {
+            toggle.IsOn = ViewModel.IsRelayRunning;
+            return;
+        }
         await ViewModel.ToggleRelayCommand.ExecuteAsync(null);
     }
 

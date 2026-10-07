@@ -65,8 +65,8 @@
                                         <Ellipse Width="10" Height="10" Fill="{ThemeResource SystemAccentColor}" VerticalAlignment="Center" />
                                         <TextBlock Text="{x:Bind ViewModel.RunningLabel, Mode=OneWay}" Style="{StaticResource SubtitleTextBlockStyle}" />
                                     </StackPanel>
-                                    <TextBlock Text="{x:Bind ViewModel.StatusDetail, Mode=OneWay}" Opacity="0.65" TextWrapping="Wrap" />
-                                </StackPanel><ToggleSwitch Grid.Column="1" Width="48" MinWidth="0" MaxWidth="48" IsOn="{x:Bind ViewModel.IsRelayRunning, Mode=OneWay}" OnContent="" OffContent="" HorizontalAlignment="Right" HorizontalContentAlignment="Right" Margin="0" Toggled="RelayToggle_Toggled" VerticalAlignment="Center" /></Grid>
+                                    <TextBlock Text="{x:Bind ViewModel.StatusDetail, Mode=OneWay}" Opacity="0.65" TextWrapping="Wrap" IsTextSelectionEnabled="True" />
+                                </StackPanel><ToggleSwitch Grid.Column="1" Width="48" MinWidth="0" MaxWidth="48" IsOn="{x:Bind ViewModel.IsRelayRunning, Mode=OneWay}" IsEnabled="{x:Bind ViewModel.CanToggleRelay, Mode=OneWay}" OnContent="" OffContent="" HorizontalAlignment="Right" HorizontalContentAlignment="Right" Margin="0" Toggled="RelayToggle_Toggled" VerticalAlignment="Center" /></Grid>
                             </Border>
                             <Border Visibility="{x:Bind ViewModel.SetupCardVisibility, Mode=OneWay}" Background="{ThemeResource CardBackgroundFillColorDefaultBrush}" CornerRadius="4" Padding="24">
                                 <StackPanel Spacing="12">

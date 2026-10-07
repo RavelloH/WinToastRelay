@@ -80,6 +80,7 @@ public sealed partial class MainWindow : Window
         {
             page.ViewModel.PropertyChanged += ViewModel_PropertyChanged;
             UpdateRelayMenu(page.ViewModel.IsRelayRunning);
+            _relayToggleItem.IsEnabled = page.ViewModel.CanToggleRelay;
         }
     }
 
@@ -117,8 +118,11 @@ public sealed partial class MainWindow : Window
 
     private void ViewModel_PropertyChanged(object? sender, PropertyChangedEventArgs e)
     {
-        if (e.PropertyName == nameof(MainPageViewModel.IsRelayRunning) && sender is MainPageViewModel vm)
+        if (sender is not MainPageViewModel vm) return;
+        if (e.PropertyName == nameof(MainPageViewModel.IsRelayRunning))
             UpdateRelayMenu(vm.IsRelayRunning);
+        else if (e.PropertyName == nameof(MainPageViewModel.CanToggleRelay))
+            _relayToggleItem.IsEnabled = vm.CanToggleRelay;
     }
 
     private void UpdateRelayMenu(bool isRunning)

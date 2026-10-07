@@ -18,7 +18,8 @@ public partial class MainPageViewModel : ObservableObject
     private RelayDeliveryTarget? _savedTarget;
     private const string ActivityFileName = "delivery-activity.json";
     private readonly SemaphoreSlim _applicationsLoadLock = new(1, 1);
-    private readonly SemaphoreSlim _relayStartLock = new(1, 1);
+    private readonly SemaphoreSlim _relayLifecycleLock = new(1, 1);
+    private readonly SemaphoreSlim _initializeLock = new(1, 1);
     private bool _initialized;
     private bool _activityLoaded;
     private bool _applicationsLoaded;
@@ -80,6 +81,7 @@ public partial class MainPageViewModel : ObservableObject
     public Visibility WebhookPreviewVisibility => string.IsNullOrEmpty(WebhookPreviewText) ? Visibility.Collapsed : Visibility.Visible;
     public Visibility WebhookValidationErrorVisibility => string.IsNullOrEmpty(WebhookValidationError) ? Visibility.Collapsed : Visibility.Visible;
     public bool CanAddWebhookSecret => WebhookSecrets.Count < WebhookSecretLimit;
+    public bool CanToggleRelay => _initialized && !IsBusy;
 
     public bool HasApplications => Applications.Count > 0;
     public Visibility ApplicationsVisibility => HasApplications ? Visibility.Visible : Visibility.Collapsed;
@@ -335,25 +337,46 @@ public partial class MainPageViewModel : ObservableObject
 
     partial void OnIsRelayRunningChanged(bool value) => OnPropertyChanged(nameof(RunningLabel));
     partial void OnRelayManuallyStoppedChanged(bool value) => OnPropertyChanged(nameof(RunningLabel));
+    partial void OnIsBusyChanged(bool value) => OnPropertyChanged(nameof(CanToggleRelay));
 
     [RelayCommand]
     private async Task ToggleRelayAsync()
     {
-        if (IsRelayRunning)
-        {
-            await _relayService.StopAsync();
-            IsRelayRunning = false;
-            _settings.RelayEnabled = false;
-            RelayManuallyStopped = true;
-            _settings.RelayManuallyStopped = true;
-            await _settingsStore.SaveAsync(_settings);
-            SetStatus(IsChinese ? "转发已暂停" : "Relay paused");
-            return;
-        }
+        // Ignore requests while an operation is active. Otherwise capture the
+        // requested state before waiting for the lifecycle lock.
+        if (!CanToggleRelay) return;
+        var shouldStart = !IsRelayRunning;
 
-        RelayManuallyStopped = false;
-        _settings.RelayManuallyStopped = false;
-        await StartRelayAutomaticallyAsync();
+        await _relayLifecycleLock.WaitAsync();
+        try
+        {
+            if (shouldStart)
+            {
+                RelayManuallyStopped = false;
+                _settings.RelayManuallyStopped = false;
+                await StartRelayCoreAsync();
+            }
+            else
+            {
+                await StopRelayCoreAsync();
+            }
+        }
+        catch (Exception ex)
+        {
+            IsBusy = true;
+            IsRelayRunning = _relayService.IsRunning;
+            _settings.RelayEnabled = IsRelayRunning;
+            _settings.RelayManuallyStopped = RelayManuallyStopped;
+            SetStatus(RelayDiagnostics.Failure(
+                shouldStart ? RelayFailureStage.RelayStart : RelayFailureStage.RelayStop,
+                ex));
+            try { await PersistRelayStateAsync(preserveDiagnostic: true); }
+            finally { IsBusy = false; }
+        }
+        finally
+        {
+            _relayLifecycleLock.Release();
+        }
     }
 
     partial void OnIsChineseChanged(bool value)
@@ -370,75 +393,98 @@ public partial class MainPageViewModel : ObservableObject
 
     public async Task InitializeAsync()
     {
-        if (_initialized) return;
-
-        // Settings and startup-task state are independent. Read them together so the
-        // first frame does not wait for two unrelated storage calls in sequence.
-        var settingsTask = _settingsStore.LoadAsync();
-        var startupTask = _startupTaskService.IsEnabledAsync();
-        _settings = await settingsTask;
-        DeliveryMode = NormalizeDeliveryMode(_settings.DeliveryMode);
-        WebhookUrl = _settings.WebhookUrl;
-        BarkServerUrl = _settings.BarkServerUrl;
-        var storedBarkDeviceKey = _secretStore.GetBarkDeviceKey();
-        var legacyBarkDeviceKey = _settings.BarkDeviceKey;
-        if (string.IsNullOrWhiteSpace(storedBarkDeviceKey) && !string.IsNullOrWhiteSpace(legacyBarkDeviceKey))
+        var startDeferredInitialization = false;
+        await _initializeLock.WaitAsync();
+        try
         {
-            // Migrate the legacy plaintext value once, then remove it from JSON on disk.
-            storedBarkDeviceKey = legacyBarkDeviceKey;
-            _secretStore.SaveBarkDeviceKey(storedBarkDeviceKey);
-            _settings.BarkDeviceKey = string.Empty;
-            await _settingsStore.SaveAsync(_settings);
-        }
-        BarkDeviceKey = storedBarkDeviceKey;
-        BarkTitleTemplate = _settings.BarkTitleTemplate;
-        BarkBodyTemplate = _settings.BarkBodyTemplate;
-        BarkParameters = _settings.BarkParameters;
-        WxPusherUids = _settings.WxPusherUids;
-        WxPusherTopicIds = _settings.WxPusherTopicIds;
-        WxPusherSummaryTemplate = _settings.WxPusherSummaryTemplate;
-        WxPusherContentTemplate = _settings.WxPusherContentTemplate;
-        FeishuWebhookUrl = _settings.FeishuWebhookUrl;
-        FeishuTitleTemplate = _settings.FeishuTitleTemplate;
-        FeishuBodyTemplate = _settings.FeishuBodyTemplate;
-        TelegramApiUrl = string.IsNullOrWhiteSpace(_settings.TelegramApiUrl) ? "https://api.telegram.org" : _settings.TelegramApiUrl;
-        TelegramChatId = _settings.TelegramChatId;
-        TelegramParseMode = _settings.TelegramParseMode;
-        TelegramTitleTemplate = _settings.TelegramTitleTemplate;
-        TelegramBodyTemplate = _settings.TelegramBodyTemplate;
-        DiscordWebhookUrl = _settings.DiscordWebhookUrl;
-        DiscordUsername = _settings.DiscordUsername;
-        DiscordTitleTemplate = _settings.DiscordTitleTemplate;
-        DiscordBodyTemplate = _settings.DiscordBodyTemplate;
-        WebhookJsonTemplate = _settings.WebhookJsonTemplate;
-        WebhookHeaders = _settings.WebhookHeaders;
-        WebhookSecrets.Clear();
-        foreach (var secret in _secretStore.GetWebhookSecrets())
-            WebhookSecrets.Add(CreateWebhookSecretOption(secret.Key, secret.Value));
-        if (!BarkParameters.Contains("icon=", StringComparison.OrdinalIgnoreCase))
-            BarkParameters = string.IsNullOrWhiteSpace(BarkParameters)
-                ? "level=active\nicon=https://raw.ravelloh.com/icon/WinToastRelay.png"
-                : BarkParameters.TrimEnd() + "\nicon=https://raw.ravelloh.com/icon/WinToastRelay.png";
-        _settings.BarkParameters = BarkParameters;
-        AllowedApplications = _settings.AllowedApplications;
-        BearerToken = _secretStore.Get();
-        WxPusherAppToken = _secretStore.GetWxPusherAppToken();
-        FeishuSecret = _secretStore.GetFeishuSecret();
-        TelegramBotToken = _secretStore.GetTelegramBotToken();
-        IsChinese = !string.Equals(_settings.Language, "en-US", StringComparison.OrdinalIgnoreCase);
-        RelayManuallyStopped = _settings.RelayManuallyStopped;
-        StartWithWindows = await startupTask;
-        _settings.ApplicationFilterEnabled |= ParseAllowedApplications().Count > 0;
-        _savedTarget = CreateTarget();
-        _relayService.Configure(GetSavedTarget(), AllowedApplications, _settings.ApplicationFilterEnabled);
-        IsDestinationConfigured = WebhookClient.IsValidConfiguration(GetSavedTarget());
+            if (_initialized) return;
 
-        _initialized = true;
-        RefreshHttpApprovalToggle();
-        // History, notification enumeration, permission checks, and icon loading can all
-        // involve storage or WinRT calls. Defer them until the first frame is rendered so
-        // launching the app remains responsive.
-        _ = InitializeDeferredAsync();
+            try
+            {
+                // Settings and startup-task state are independent. Read them together so the
+                // first frame does not wait for two unrelated storage calls in sequence.
+                var settingsTask = _settingsStore.LoadAsync();
+                var startupTask = _startupTaskService.IsEnabledAsync();
+                _settings = await settingsTask;
+                DeliveryMode = NormalizeDeliveryMode(_settings.DeliveryMode);
+                WebhookUrl = _settings.WebhookUrl;
+                BarkServerUrl = _settings.BarkServerUrl;
+                var storedBarkDeviceKey = _secretStore.GetBarkDeviceKey();
+                var legacyBarkDeviceKey = _settings.BarkDeviceKey;
+                if (string.IsNullOrWhiteSpace(storedBarkDeviceKey) && !string.IsNullOrWhiteSpace(legacyBarkDeviceKey))
+                {
+                    // Migrate the legacy plaintext value once, then remove it from JSON on disk.
+                    storedBarkDeviceKey = legacyBarkDeviceKey;
+                    _secretStore.SaveBarkDeviceKey(storedBarkDeviceKey);
+                    _settings.BarkDeviceKey = string.Empty;
+                    await _settingsStore.SaveAsync(_settings);
+                }
+                BarkDeviceKey = storedBarkDeviceKey;
+                BarkTitleTemplate = _settings.BarkTitleTemplate;
+                BarkBodyTemplate = _settings.BarkBodyTemplate;
+                BarkParameters = _settings.BarkParameters;
+                WxPusherUids = _settings.WxPusherUids;
+                WxPusherTopicIds = _settings.WxPusherTopicIds;
+                WxPusherSummaryTemplate = _settings.WxPusherSummaryTemplate;
+                WxPusherContentTemplate = _settings.WxPusherContentTemplate;
+                FeishuWebhookUrl = _settings.FeishuWebhookUrl;
+                FeishuTitleTemplate = _settings.FeishuTitleTemplate;
+                FeishuBodyTemplate = _settings.FeishuBodyTemplate;
+                TelegramApiUrl = string.IsNullOrWhiteSpace(_settings.TelegramApiUrl) ? "https://api.telegram.org" : _settings.TelegramApiUrl;
+                TelegramChatId = _settings.TelegramChatId;
+                TelegramParseMode = _settings.TelegramParseMode;
+                TelegramTitleTemplate = _settings.TelegramTitleTemplate;
+                TelegramBodyTemplate = _settings.TelegramBodyTemplate;
+                DiscordWebhookUrl = _settings.DiscordWebhookUrl;
+                DiscordUsername = _settings.DiscordUsername;
+                DiscordTitleTemplate = _settings.DiscordTitleTemplate;
+                DiscordBodyTemplate = _settings.DiscordBodyTemplate;
+                WebhookJsonTemplate = _settings.WebhookJsonTemplate;
+                WebhookHeaders = _settings.WebhookHeaders;
+                WebhookSecrets.Clear();
+                foreach (var secret in _secretStore.GetWebhookSecrets())
+                    WebhookSecrets.Add(CreateWebhookSecretOption(secret.Key, secret.Value));
+                if (!BarkParameters.Contains("icon=", StringComparison.OrdinalIgnoreCase))
+                    BarkParameters = string.IsNullOrWhiteSpace(BarkParameters)
+                        ? "level=active\nicon=https://raw.ravelloh.com/icon/WinToastRelay.png"
+                        : BarkParameters.TrimEnd() + "\nicon=https://raw.ravelloh.com/icon/WinToastRelay.png";
+                _settings.BarkParameters = BarkParameters;
+                AllowedApplications = _settings.AllowedApplications;
+                BearerToken = _secretStore.Get();
+                WxPusherAppToken = _secretStore.GetWxPusherAppToken();
+                FeishuSecret = _secretStore.GetFeishuSecret();
+                TelegramBotToken = _secretStore.GetTelegramBotToken();
+                IsChinese = !string.Equals(_settings.Language, "en-US", StringComparison.OrdinalIgnoreCase);
+                RelayManuallyStopped = _settings.RelayManuallyStopped;
+                StartWithWindows = await startupTask;
+                _settings.ApplicationFilterEnabled |= ParseAllowedApplications().Count > 0;
+                _savedTarget = CreateTarget();
+                _relayService.Configure(GetSavedTarget(), AllowedApplications, _settings.ApplicationFilterEnabled);
+                IsDestinationConfigured = WebhookClient.IsValidConfiguration(GetSavedTarget());
+
+                _initialized = true;
+                RefreshHttpApprovalToggle();
+                OnPropertyChanged(nameof(CanToggleRelay));
+                startDeferredInitialization = true;
+            }
+            catch (Exception ex)
+            {
+                IsRelayRunning = _relayService.IsRunning;
+                SetStatus(RelayDiagnostics.Failure(RelayFailureStage.Initialization, ex));
+            }
+        }
+        finally
+        {
+            _initializeLock.Release();
+        }
+
+        if (startDeferredInitialization)
+        {
+            // History, notification enumeration, permission checks, and icon loading can all
+            // involve storage or WinRT calls. Defer them until the first frame is rendered so
+            // launching the app remains responsive.
+            _ = InitializeDeferredAsync();
+        }
     }
 
     private async Task InitializeDeferredAsync()
@@ -457,82 +503,154 @@ public partial class MainPageViewModel : ObservableObject
         }
         catch (Exception ex)
         {
-            SetStatus($"Initialization error: {ex.Message}");
+            IsRelayRunning = _relayService.IsRunning;
+            SetStatus(RelayDiagnostics.Failure(RelayFailureStage.Initialization, ex));
         }
     }
 
-    private async Task StartRelayAutomaticallyAsync()
+    private async Task<bool> StartRelayAutomaticallyAsync()
     {
-        await _relayStartLock.WaitAsync();
+        await _relayLifecycleLock.WaitAsync();
         try
         {
-            if (IsBusy) return;
+            return await StartRelayCoreAsync();
+        }
+        catch (Exception ex)
+        {
             IsBusy = true;
-            try
-            {
-                var target = GetSavedTarget();
-                if (!WebhookClient.IsValidConfiguration(target))
-                {
-                    if (_relayService.IsRunning) await _relayService.StopAsync();
-                    IsRelayRunning = false;
-                    IsDestinationConfigured = false;
-                    _settings.RelayEnabled = false;
-                    var configurationError = WebhookClient.GetConfigurationError(target);
-                    SetStatus(configurationError == EndpointTransportPolicy.HttpApprovalRequired
-                        ? configurationError
-                        : IsChinese ? "请先完成通知通道配置，保存后将自动开始监听" : "Complete the destination configuration; listening starts automatically after saving");
-                    return;
-                }
-
-                IsDestinationConfigured = true;
-                if (RelayManuallyStopped)
-                {
-                    IsRelayRunning = false;
-                    SetStatus(IsChinese ? "转发已停止" : "Relay stopped");
-                    return;
-                }
-
-                _relayService.Configure(target, AllowedApplications, _settings.ApplicationFilterEnabled);
-                var result = await _relayService.StartAsync();
-                IsRelayRunning = result.Succeeded;
-                if (result.Succeeded) RelayManuallyStopped = false;
-                SetStatus(result.Succeeded ? (IsChinese ? "通知监听已自动启动" : "Notification listening started automatically") : result.Detail);
-                _settings.RelayEnabled = IsRelayRunning;
-                _settings.RelayManuallyStopped = RelayManuallyStopped;
-                await _settingsStore.SaveAsync(_settings);
-            }
-            finally
-            {
-                IsBusy = false;
-            }
+            IsRelayRunning = _relayService.IsRunning;
+            _settings.RelayEnabled = IsRelayRunning;
+            _settings.RelayManuallyStopped = RelayManuallyStopped;
+            SetStatus(RelayDiagnostics.Failure(RelayFailureStage.RelayStart, ex));
+            try { await PersistRelayStateAsync(preserveDiagnostic: true); }
+            finally { IsBusy = false; }
+            return false;
         }
         finally
         {
-            _relayStartLock.Release();
+            _relayLifecycleLock.Release();
         }
+    }
+
+    // Caller holds _relayLifecycleLock. This core deliberately does not acquire it,
+    // so the manual-start path can reuse it without recursively waiting on the lock.
+    private async Task<bool> StartRelayCoreAsync()
+    {
+        IsBusy = true;
+        try
+        {
+            var target = GetSavedTarget();
+            if (!WebhookClient.IsValidConfiguration(target))
+            {
+                if (_relayService.IsRunning) await _relayService.StopAsync();
+                IsRelayRunning = _relayService.IsRunning;
+                IsDestinationConfigured = false;
+                _settings.RelayEnabled = IsRelayRunning;
+                _settings.RelayManuallyStopped = RelayManuallyStopped;
+                var configurationError = WebhookClient.GetConfigurationError(target);
+                SetStatus(configurationError == EndpointTransportPolicy.HttpApprovalRequired
+                    ? configurationError
+                    : IsChinese ? "请先完成通知通道配置，保存后将自动开始监听" : "Complete the destination configuration; listening starts automatically after saving");
+                await PersistRelayStateAsync();
+                return false;
+            }
+
+            IsDestinationConfigured = true;
+            if (RelayManuallyStopped)
+            {
+                if (_relayService.IsRunning) await _relayService.StopAsync();
+                IsRelayRunning = _relayService.IsRunning;
+                SetStatus(IsChinese ? "转发已停止" : "Relay stopped");
+                _settings.RelayEnabled = IsRelayRunning;
+                _settings.RelayManuallyStopped = true;
+                await PersistRelayStateAsync();
+                return false;
+            }
+
+            _relayService.Configure(target, AllowedApplications, _settings.ApplicationFilterEnabled);
+            var result = await _relayService.StartAsync();
+            IsRelayRunning = _relayService.IsRunning;
+            if (result.Succeeded) RelayManuallyStopped = false;
+            var hasDiagnostic = RelayDiagnostics.IsDiagnostic(result.Detail);
+            SetStatus(result.Succeeded && !hasDiagnostic
+                ? (IsChinese ? "通知监听已自动启动" : "Notification listening started automatically")
+                : result.Detail);
+            _settings.RelayEnabled = IsRelayRunning;
+            _settings.RelayManuallyStopped = RelayManuallyStopped;
+            var persisted = await PersistRelayStateAsync(preserveDiagnostic: hasDiagnostic);
+            return result.Succeeded && !hasDiagnostic && persisted;
+        }
+        finally
+        {
+            IsBusy = false;
+        }
+    }
+
+    // Caller holds _relayLifecycleLock.
+    private async Task StopRelayCoreAsync()
+    {
+        IsBusy = true;
+        try
+        {
+            RelayManuallyStopped = true;
+            _settings.RelayManuallyStopped = true;
+            await _relayService.StopAsync();
+            IsRelayRunning = _relayService.IsRunning;
+            _settings.RelayEnabled = IsRelayRunning;
+            SetStatus(IsRelayRunning
+                ? "Relay stop not confirmed"
+                : IsChinese ? "转发已暂停" : "Relay paused");
+            await PersistRelayStateAsync();
+        }
+        finally
+        {
+            IsBusy = false;
+        }
+    }
+
+    private async Task<bool> PersistRelayStateAsync(bool preserveDiagnostic = false)
+    {
+        try
+        {
+            await _settingsStore.SaveAsync(_settings);
+            return true;
+        }
+        catch (Exception ex)
+        {
+            if (!preserveDiagnostic || !RelayDiagnostics.IsDiagnostic(_statusSource))
+                SetStatus(RelayDiagnostics.Failure(RelayFailureStage.SettingsSave, ex));
+            return false;
+        }
+    }
+
+    private async Task SaveSettingsWithLifecycleLockAsync()
+    {
+        await _relayLifecycleLock.WaitAsync();
+        try { await _settingsStore.SaveAsync(_settings); }
+        finally { _relayLifecycleLock.Release(); }
     }
 
     [RelayCommand]
     private async Task SaveSettingsAsync()
     {
+        if (!_initialized) return;
         if (!TryValidateWebhookSettings()) return;
         try
         {
             if (!await SaveConfigurationAsync()) return;
-            await StartRelayAutomaticallyAsync();
-            if (WebhookClient.GetConfigurationError(GetSavedTarget()) == EndpointTransportPolicy.HttpApprovalRequired) return;
+            if (!await StartRelayAutomaticallyAsync()) return;
             SetStatus(IsChinese ? "设置已保存" : "Settings saved");
         }
-        catch (Exception)
+        catch (Exception ex)
         {
-            if (!IsJsonWebhookMode) throw;
-            SetWebhookValidationError("Webhook save failed");
+            SetStatus(RelayDiagnostics.Failure(RelayFailureStage.SettingsSave, ex));
         }
     }
 
     [RelayCommand]
     private async Task TestWebhookAsync()
     {
+        if (!_initialized) return;
         if (!TryValidateWebhookSettings()) return;
         try
         {
@@ -705,9 +823,10 @@ public partial class MainPageViewModel : ObservableObject
     [RelayCommand]
     private async Task ToggleLanguageAsync()
     {
+        if (!_initialized) return;
         IsChinese = !IsChinese;
         _settings.Language = IsChinese ? "zh-CN" : "en-US";
-        try { await _settingsStore.SaveAsync(_settings); }
+        try { await SaveSettingsWithLifecycleLockAsync(); }
         catch (Exception)
         {
             SetStatus("Language preference save failed");
@@ -720,10 +839,11 @@ public partial class MainPageViewModel : ObservableObject
     [RelayCommand]
     private async Task ToggleStartupAsync()
     {
+        if (!_initialized) return;
         var enabled = await _startupTaskService.SetEnabledAsync(!StartWithWindows);
         StartWithWindows = enabled;
         _settings.StartWithWindows = enabled;
-        await _settingsStore.SaveAsync(_settings);
+        await SaveSettingsWithLifecycleLockAsync();
         SetStatus(enabled
             ? (IsChinese ? "已启用登录启动" : "Start with Windows enabled")
             : (IsChinese ? "已关闭登录启动" : "Start with Windows disabled"));
@@ -737,50 +857,58 @@ public partial class MainPageViewModel : ObservableObject
         // keystrokes must not silently become the live transport configuration.
         var target = CreateTarget();
 
-        // Finish credential writes before mutating the ordinary settings cache,
-        // so a failed vault write cannot be persisted by an incidental filter save.
-        if (canSaveWebhookSecrets)
-            _secretStore.SaveWebhookSecrets(target.WebhookSecrets!);
-        _secretStore.Save(target.BearerToken);
-        _secretStore.SaveBarkDeviceKey(target.BarkDeviceKey);
-        _secretStore.SaveWxPusherAppToken(target.WxPusherAppToken);
-        _secretStore.SaveFeishuSecret(target.FeishuSecret);
-        _secretStore.SaveTelegramBotToken(target.TelegramBotToken);
+        await _relayLifecycleLock.WaitAsync();
+        try
+        {
+            // Finish credential writes before mutating the ordinary settings cache,
+            // so a failed vault write cannot be persisted by an incidental filter save.
+            if (canSaveWebhookSecrets)
+                _secretStore.SaveWebhookSecrets(target.WebhookSecrets!);
+            _secretStore.Save(target.BearerToken);
+            _secretStore.SaveBarkDeviceKey(target.BarkDeviceKey);
+            _secretStore.SaveWxPusherAppToken(target.WxPusherAppToken);
+            _secretStore.SaveFeishuSecret(target.FeishuSecret);
+            _secretStore.SaveTelegramBotToken(target.TelegramBotToken);
 
-        _settings.WebhookUrl = WebhookUrl.Trim();
-        _settings.WebhookJsonTemplate = WebhookJsonTemplate;
-        _settings.WebhookHeaders = WebhookHeaders;
-        _settings.DeliveryMode = NormalizeDeliveryMode(DeliveryMode);
-        _settings.BarkServerUrl = BarkServerUrl.Trim();
-        // Bark's device key is a credential, not a regular application setting.
-        _settings.BarkDeviceKey = string.Empty;
-        _settings.BarkTitleTemplate = BarkTitleTemplate;
-        _settings.BarkBodyTemplate = BarkBodyTemplate;
-        _settings.BarkParameters = BarkParameters;
-        _settings.WxPusherUids = WxPusherUids;
-        _settings.WxPusherTopicIds = WxPusherTopicIds;
-        _settings.WxPusherSummaryTemplate = WxPusherSummaryTemplate;
-        _settings.WxPusherContentTemplate = WxPusherContentTemplate;
-        _settings.FeishuWebhookUrl = FeishuWebhookUrl.Trim();
-        _settings.FeishuTitleTemplate = FeishuTitleTemplate;
-        _settings.FeishuBodyTemplate = FeishuBodyTemplate;
-        _settings.TelegramApiUrl = TelegramApiUrl.Trim();
-        _settings.TelegramChatId = TelegramChatId.Trim();
-        _settings.TelegramParseMode = TelegramParseMode.Trim();
-        _settings.TelegramTitleTemplate = TelegramTitleTemplate;
-        _settings.TelegramBodyTemplate = TelegramBodyTemplate;
-        _settings.DiscordWebhookUrl = DiscordWebhookUrl.Trim();
-        _settings.DiscordUsername = DiscordUsername.Trim();
-        _settings.DiscordTitleTemplate = DiscordTitleTemplate;
-        _settings.DiscordBodyTemplate = DiscordBodyTemplate;
-        _settings.AllowedApplications = AllowedApplications;
-        _settings.Language = IsChinese ? "zh-CN" : "en-US";
-        _settings.RelayEnabled = IsRelayRunning;
-        _settings.StartWithWindows = StartWithWindows;
-        await _settingsStore.SaveAsync(_settings);
-        _savedTarget = target;
-        _relayService.Configure(GetSavedTarget(), AllowedApplications, _settings.ApplicationFilterEnabled);
-        return true;
+            _settings.WebhookUrl = target.WebhookUrl;
+            _settings.WebhookJsonTemplate = target.WebhookJsonTemplate;
+            _settings.WebhookHeaders = target.WebhookHeaders;
+            _settings.DeliveryMode = NormalizeDeliveryMode(target.Mode);
+            _settings.BarkServerUrl = target.BarkServerUrl;
+            // Bark's device key is a credential, not a regular application setting.
+            _settings.BarkDeviceKey = string.Empty;
+            _settings.BarkTitleTemplate = target.BarkTitleTemplate;
+            _settings.BarkBodyTemplate = target.BarkBodyTemplate;
+            _settings.BarkParameters = target.BarkParameters;
+            _settings.WxPusherUids = target.WxPusherUids;
+            _settings.WxPusherTopicIds = target.WxPusherTopicIds;
+            _settings.WxPusherSummaryTemplate = target.WxPusherSummaryTemplate;
+            _settings.WxPusherContentTemplate = target.WxPusherContentTemplate;
+            _settings.FeishuWebhookUrl = target.FeishuWebhookUrl;
+            _settings.FeishuTitleTemplate = target.FeishuTitleTemplate;
+            _settings.FeishuBodyTemplate = target.FeishuBodyTemplate;
+            _settings.TelegramApiUrl = target.TelegramApiUrl;
+            _settings.TelegramChatId = target.TelegramChatId;
+            _settings.TelegramParseMode = target.TelegramParseMode;
+            _settings.TelegramTitleTemplate = target.TelegramTitleTemplate;
+            _settings.TelegramBodyTemplate = target.TelegramBodyTemplate;
+            _settings.DiscordWebhookUrl = target.DiscordWebhookUrl;
+            _settings.DiscordUsername = target.DiscordUsername;
+            _settings.DiscordTitleTemplate = target.DiscordTitleTemplate;
+            _settings.DiscordBodyTemplate = target.DiscordBodyTemplate;
+            _settings.AllowedApplications = AllowedApplications;
+            _settings.Language = IsChinese ? "zh-CN" : "en-US";
+            _settings.RelayEnabled = IsRelayRunning;
+            _settings.StartWithWindows = StartWithWindows;
+            await _settingsStore.SaveAsync(_settings);
+            _savedTarget = target;
+            _relayService.Configure(GetSavedTarget(), AllowedApplications, _settings.ApplicationFilterEnabled);
+            return true;
+        }
+        finally
+        {
+            _relayLifecycleLock.Release();
+        }
     }
 
     private RelayDeliveryTarget GetSavedTarget()
@@ -950,11 +1078,11 @@ public partial class MainPageViewModel : ObservableObject
     {
         try
         {
-            await _settingsStore.SaveAsync(_settings);
+            await SaveSettingsWithLifecycleLockAsync();
         }
         catch (Exception ex)
         {
-            SetStatus(IsChinese ? $"保存 HTTP 授权撤销失败：{ex.Message}" : $"Failed to save HTTP approval revocation: {ex.Message}");
+            SetStatus(RelayDiagnostics.Failure(RelayFailureStage.SettingsSave, ex));
         }
         await RecheckRelayAfterHttpPolicyChangeAsync();
     }
@@ -964,7 +1092,8 @@ public partial class MainPageViewModel : ObservableObject
         try { await StartRelayAutomaticallyAsync(); }
         catch (Exception ex)
         {
-            SetStatus(IsChinese ? $"更新 HTTP 转发状态失败：{ex.Message}" : $"Failed to update HTTP relay state: {ex.Message}");
+            IsRelayRunning = _relayService.IsRunning;
+            SetStatus(RelayDiagnostics.Failure(RelayFailureStage.RelayStart, ex));
         }
     }
 
@@ -1092,15 +1221,20 @@ public partial class MainPageViewModel : ObservableObject
 
     private async Task SaveApplicationFiltersAsync()
     {
-        try { await _settingsStore.SaveAsync(_settings); }
+        try { await SaveSettingsWithLifecycleLockAsync(); }
         catch (Exception)
         {
             SetStatus(IsChinese ? "应用筛选设置保存失败，请重试。" : "Application filters could not be saved. Please try again.");
         }
     }
 
-    private string LocalizeStatus(string status) => status switch
+    private string LocalizeStatus(string status)
     {
+        if (RelayDiagnostics.IsDiagnostic(status))
+            return RelayDiagnostics.Localize(status, IsChinese);
+
+        return status switch
+        {
         _ when IsWebhookTemplateError(status) => LocalizeWebhookValidationError(status),
         "Webhook request timed out" => IsChinese ? "Webhook 请求超时，将按重试策略处理。" : "The webhook request timed out and is eligible for retry.",
         "Webhook network request failed" => IsChinese ? "Webhook 网络请求失败，请检查网络和目标服务。" : "The webhook network request failed. Check the network and destination service.",
@@ -1114,6 +1248,7 @@ public partial class MainPageViewModel : ObservableObject
         "尚未启动监听" or "Not listening yet" => IsChinese ? "尚未启动监听" : "Not listening yet",
         "Listening for Windows notifications" or "正在监听 Windows 通知" => IsChinese ? "正在监听 Windows 通知" : "Listening for Windows notifications",
         "Relay paused" or "转发已暂停" => IsChinese ? "转发已暂停" : "Relay paused",
+        "Relay stop not confirmed" => IsChinese ? "无法确认转发已停止。" : "Could not confirm that the relay stopped.",
         "转发已停止" or "Relay stopped" => IsChinese ? "转发已停止" : "Relay stopped",
         "通知监听已自动启动" or "Notification listening started automatically" => IsChinese ? "通知监听已自动启动" : "Notification listening started automatically",
         "Webhook validation error" => string.IsNullOrEmpty(_webhookValidationErrorSource)
@@ -1127,8 +1262,9 @@ public partial class MainPageViewModel : ObservableObject
         "测试发送成功" or "Test delivered" => IsChinese ? "测试发送成功" : "Test delivered",
         "已启用登录启动" or "Start with Windows enabled" => IsChinese ? "已启用登录启动" : "Start with Windows enabled",
         "已关闭登录启动" or "Start with Windows disabled" => IsChinese ? "已关闭登录启动" : "Start with Windows disabled",
-        _ => status
-    };
+            _ => status
+        };
+    }
 
     private async Task LoadActivityAsync()
     {
