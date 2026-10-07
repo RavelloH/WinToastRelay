@@ -44,12 +44,22 @@ public sealed partial class MainWindow : Window
         AppWindow.ResizeClient(new Windows.Graphics.SizeInt32(DefaultWindowWidth, DefaultWindowHeight));
 
         var trayMenu = new MenuFlyout();
-        var openItem = new MenuFlyoutItem { Text = "打开 WinToastRelay" };
-        openItem.Click += OpenFromTray_Click;
-        _relayToggleItem = new MenuFlyoutItem { Text = "开始转发" };
-        _relayToggleItem.Click += RelayToggleFromTray_Click;
-        var exitItem = new MenuFlyoutItem { Text = "退出" };
-        exitItem.Click += ExitFromTray_Click;
+        // H.NotifyIcon's native popup menu invokes Command, not the XAML Click event.
+        var openItem = new MenuFlyoutItem
+        {
+            Text = "打开 WinToastRelay",
+            Command = new RelayCommand(ShowFromTray)
+        };
+        _relayToggleItem = new MenuFlyoutItem
+        {
+            Text = "开始转发",
+            Command = new AsyncRelayCommand(RelayToggleFromTrayAsync)
+        };
+        var exitItem = new MenuFlyoutItem
+        {
+            Text = "退出",
+            Command = new RelayCommand(RequestExitFromTray)
+        };
         trayMenu.Items.Add(openItem);
         trayMenu.Items.Add(_relayToggleItem);
         trayMenu.Items.Add(new MenuFlyoutSeparator());
@@ -97,12 +107,7 @@ public sealed partial class MainWindow : Window
         }
     }
 
-    private void OpenFromTray_Click(object sender, RoutedEventArgs e)
-    {
-        ShowFromTray();
-    }
-
-    private async void RelayToggleFromTray_Click(object sender, RoutedEventArgs e)
+    private async Task RelayToggleFromTrayAsync()
     {
         if (RootFrame.Content is MainPage page)
             await page.ViewModel.ToggleRelayCommand.ExecuteAsync(null);
@@ -145,10 +150,19 @@ public sealed partial class MainWindow : Window
     [return: MarshalAs(UnmanagedType.Bool)]
     private static extern bool ShowWindow(nint hWnd, int nCmdShow);
 
-    private async void ExitFromTray_Click(object sender, RoutedEventArgs e)
+    private void RequestExitFromTray()
     {
         if (_isExiting) return;
         _isExiting = true;
+        // Let the native menu callback finish before disposing its owning tray icon.
+        if (!DispatcherQueue.TryEnqueue(async () => await ExitFromTrayAsync()))
+        {
+            _ = App.ShutdownAsync();
+        }
+    }
+
+    private async Task ExitFromTrayAsync()
+    {
         try { _trayIcon.Dispose(); }
         catch { }
         await App.ShutdownAsync();
