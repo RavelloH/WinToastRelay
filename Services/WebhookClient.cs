@@ -240,10 +240,10 @@ public sealed class WebhookClient
         if (!string.IsNullOrWhiteSpace(target.FeishuSecret))
         {
             var timestamp = DateTimeOffset.UtcNow.ToUnixTimeSeconds().ToString(CultureInfo.InvariantCulture);
-            var message = Encoding.UTF8.GetBytes($"{timestamp}\n{target.FeishuSecret}");
-            var key = Encoding.UTF8.GetBytes(target.FeishuSecret);
+            // Feishu signs an empty message using timestamp + LF + secret as the HMAC key.
+            var key = Encoding.UTF8.GetBytes($"{timestamp}\n{target.FeishuSecret}");
             json["timestamp"] = timestamp;
-            json["sign"] = Convert.ToBase64String(HMACSHA256.HashData(key, message));
+            json["sign"] = Convert.ToBase64String(HMACSHA256.HashData(key, Array.Empty<byte>()));
         }
         return json.ToJsonString();
     }

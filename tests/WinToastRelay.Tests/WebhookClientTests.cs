@@ -1,4 +1,6 @@
+using System.Globalization;
 using System.Net;
+using System.Security.Cryptography;
 using System.Text;
 using System.Text.Json;
 using WinToastRelay.Models;
@@ -325,8 +327,13 @@ public sealed class WebhookClientTests
         Assert.Contains("expected 1 recipient results, received 0", result.Detail);
     }
 
-    [Fact]
-    public async Task DeliverAsync_FeishuMode_PostsSignedTextMessage()
+    [Theory]
+    [InlineData("feishu-secret")]
+    [InlineData("飞书-secret-🔑")]
+    [InlineData("feishu-secret-longer-than-the-sha256-block-size-0123456789-0123456789-0123456789")]
+    [InlineData("")]
+    [InlineData(" ")]
+    public async Task DeliverAsync_FeishuMode_PostsTextMessageWithOptionalSignature(string secret)
     {
         using var listener = new HttpListener();
         listener.Prefixes.Add("http://127.0.0.1:18772/");
@@ -347,10 +354,11 @@ public sealed class WebhookClientTests
             string.Empty,
             string.Empty,
             FeishuWebhookUrl: "http://127.0.0.1:18772/bot",
-            FeishuSecret: "feishu-secret",
+            FeishuSecret: secret,
             FeishuTitleTemplate: "{app}: {title}",
             FeishuBodyTemplate: "{body}");
 
+        var earliestTimestamp = DateTimeOffset.UtcNow.ToUnixTimeSeconds();
         var deliveryTask = new WebhookClient().DeliverAsync(target, payload);
         var context = await requestTask;
         using var reader = new StreamReader(context.Request.InputStream);
@@ -369,8 +377,24 @@ public sealed class WebhookClientTests
         using var json = JsonDocument.Parse(body);
         Assert.Equal("text", json.RootElement.GetProperty("msg_type").GetString());
         Assert.Equal("Calendar: Meeting\nStarts soon", json.RootElement.GetProperty("content").GetProperty("text").GetString());
-        Assert.False(string.IsNullOrWhiteSpace(json.RootElement.GetProperty("timestamp").GetString()));
-        Assert.False(string.IsNullOrWhiteSpace(json.RootElement.GetProperty("sign").GetString()));
+        if (string.IsNullOrWhiteSpace(secret))
+        {
+            Assert.False(json.RootElement.TryGetProperty("timestamp", out _));
+            Assert.False(json.RootElement.TryGetProperty("sign", out _));
+        }
+        else
+        {
+            var timestamp = json.RootElement.GetProperty("timestamp").GetString();
+            Assert.False(string.IsNullOrWhiteSpace(timestamp));
+            Assert.InRange(long.Parse(timestamp!, CultureInfo.InvariantCulture),
+                earliestTimestamp, DateTimeOffset.UtcNow.ToUnixTimeSeconds());
+
+            // Feishu uses timestamp + LF + secret as the key and an empty message.
+            // Calculate the expected signature independently from the sent timestamp.
+            using var hmac = new HMACSHA256(Encoding.UTF8.GetBytes(timestamp + "\n" + secret));
+            var expectedSignature = Convert.ToBase64String(hmac.ComputeHash(Array.Empty<byte>()));
+            Assert.Equal(expectedSignature, json.RootElement.GetProperty("sign").GetString());
+        }
     }
 
     [Fact]
