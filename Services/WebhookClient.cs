@@ -28,41 +28,64 @@ public sealed class WebhookClient
     private const int DiscordTextCharacterLimit = 2000;
     private const string ChannelTruncationSuffix = "\n[truncated by WinToastRelay]";
     private static readonly Encoding Utf8 = new UTF8Encoding(encoderShouldEmitUTF8Identifier: false);
-    private static readonly HttpClient HttpClient = new() { Timeout = TimeSpan.FromSeconds(15) };
+    // A POST can contain notification text and credentials. Do not resend it to a
+    // redirect target that the user did not configure and approve.
+    private static readonly HttpClient SharedHttpClient = new(new HttpClientHandler { AllowAutoRedirect = false })
+        { Timeout = TimeSpan.FromSeconds(15) };
+    private readonly HttpClient _httpClient;
 
-    public static bool IsValidEndpoint(string endpoint) =>
-        Uri.TryCreate(endpoint, UriKind.Absolute, out var uri) &&
-        (uri.Scheme == Uri.UriSchemeHttps ||
-         (uri.Scheme == Uri.UriSchemeHttp && (uri.IsLoopback || string.Equals(uri.Host, "localhost", StringComparison.OrdinalIgnoreCase))));
+    public WebhookClient() : this(SharedHttpClient) { }
+
+    internal WebhookClient(HttpClient httpClient) => _httpClient = httpClient;
+
+    public static bool IsValidEndpoint(string endpoint, string approvedHttpEndpoint = "") =>
+        EndpointTransportPolicy.IsEndpointAllowed(endpoint, approvedHttpEndpoint);
 
     public static bool IsValidConfiguration(RelayDeliveryTarget target)
     {
         if (target.IsBark)
-            return !string.IsNullOrWhiteSpace(target.BarkDeviceKey) && IsValidEndpoint(target.BarkServerUrl);
+            return !string.IsNullOrWhiteSpace(target.BarkDeviceKey) && IsValidEndpoint(target.BarkServerUrl, target.ApprovedHttpEndpoint);
 
         if (target.IsWxPusher)
         {
             var uids = ParseWxPusherValues(target.WxPusherUids);
             if (!TryParseWxPusherTopicIds(target.WxPusherTopicIds, out var topicIds)) return false;
             return !string.IsNullOrWhiteSpace(target.WxPusherAppToken) &&
-                   IsValidEndpoint(target.WxPusherApiUrl) &&
+                   IsValidEndpoint(target.WxPusherApiUrl, target.ApprovedHttpEndpoint) &&
                    uids.Length <= WxPusherUidLimit &&
                    topicIds.Length <= WxPusherTopicLimit &&
                    (uids.Length > 0 || topicIds.Length > 0);
         }
 
         if (target.IsFeishu)
-            return IsValidEndpoint(target.FeishuWebhookUrl);
+            return IsValidEndpoint(target.FeishuWebhookUrl, target.ApprovedHttpEndpoint);
 
         if (target.IsTelegram)
             return !string.IsNullOrWhiteSpace(target.TelegramBotToken) &&
                    !string.IsNullOrWhiteSpace(target.TelegramChatId) &&
-                   IsValidEndpoint(target.TelegramApiUrl);
+                   IsValidEndpoint(target.TelegramApiUrl, target.ApprovedHttpEndpoint);
 
         if (target.IsDiscord)
-            return IsValidEndpoint(target.DiscordWebhookUrl);
+            return IsValidEndpoint(target.DiscordWebhookUrl, target.ApprovedHttpEndpoint);
 
-        return target.IsJsonWebhook && IsValidEndpoint(target.WebhookUrl);
+        return target.IsJsonWebhook && IsValidEndpoint(target.WebhookUrl, target.ApprovedHttpEndpoint);
+    }
+
+    public static string GetConfigurationError(RelayDeliveryTarget target)
+    {
+        if (IsValidConfiguration(target)) return string.Empty;
+        var endpoint = EndpointTransportPolicy.GetConfiguredEndpoint(target);
+        if ((target.IsBark || target.IsWxPusher || target.IsFeishu || target.IsTelegram || target.IsDiscord || target.IsJsonWebhook) &&
+            EndpointTransportPolicy.RequiresHttpApproval(endpoint) &&
+            !EndpointTransportPolicy.IsApproved(endpoint, target.ApprovedHttpEndpoint))
+            return EndpointTransportPolicy.HttpApprovalRequired;
+
+        return target.IsBark ? "Invalid Bark configuration"
+            : target.IsWxPusher ? "Invalid WxPusher configuration"
+            : target.IsFeishu ? "Invalid Feishu configuration"
+            : target.IsTelegram ? "Invalid Telegram configuration"
+            : target.IsDiscord ? "Invalid Discord configuration"
+            : "Invalid webhook URL";
     }
 
     public async Task<DeliveryResult> DeliverAsync(string endpoint, string bearerToken, WebhookPayload payload)
@@ -81,14 +104,10 @@ public sealed class WebhookClient
 
     internal async Task<DeliveryResult> DeliverAsync(RelayDeliveryTarget target, WebhookPayload payload, CancellationToken cancellationToken)
     {
-        if (!IsValidConfiguration(target))
-            return new DeliveryResult(false, target.IsBark
-                ? "Invalid Bark configuration"
-                : target.IsWxPusher ? "Invalid WxPusher configuration"
-                : target.IsFeishu ? "Invalid Feishu configuration"
-                : target.IsTelegram ? "Invalid Telegram configuration"
-                : target.IsDiscord ? "Invalid Discord configuration"
-                : "Invalid webhook URL", false);
+        cancellationToken.ThrowIfCancellationRequested();
+        var configurationError = GetConfigurationError(target);
+        if (!string.IsNullOrEmpty(configurationError))
+            return new DeliveryResult(false, configurationError, false);
 
         var uri = target.IsBark
             ? BuildBarkPushUri(target.BarkServerUrl)
@@ -121,7 +140,9 @@ public sealed class WebhookClient
 
         try
         {
-            using var response = await HttpClient.SendAsync(request, cancellationToken);
+            using var response = await _httpClient.SendAsync(request, cancellationToken);
+            if ((int)response.StatusCode is >= 300 and < 400)
+                return new DeliveryResult(false, $"HTTP {(int)response.StatusCode}: Redirect blocked; configure the final destination URL", false);
             var retryable = response.StatusCode == System.Net.HttpStatusCode.RequestTimeout ||
                             response.StatusCode == System.Net.HttpStatusCode.TooManyRequests ||
                             (int)response.StatusCode >= 500;

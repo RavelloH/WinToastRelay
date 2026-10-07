@@ -28,7 +28,8 @@ public sealed record RelayDeliveryTarget(
     string DiscordWebhookUrl = "",
     string DiscordUsername = "WinToastRelay",
     string DiscordTitleTemplate = "{app}: {title}",
-    string DiscordBodyTemplate = "{body}")
+    string DiscordBodyTemplate = "{body}",
+    string ApprovedHttpEndpoint = "")
 {
     public const string BarkMode = "bark";
     public const string JsonWebhookMode = "json";

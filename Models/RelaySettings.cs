@@ -3,6 +3,8 @@ namespace WinToastRelay.Models;
 public sealed class RelaySettings
 {
     public string DeliveryMode { get; set; } = RelayDeliveryTarget.BarkMode;
+    // Consent is scoped to one canonical endpoint for each channel, not a global HTTP bypass.
+    public Dictionary<string, string> HttpEndpointApprovals { get; set; } = new();
     public string WebhookUrl { get; set; } = string.Empty;
     public string BarkServerUrl { get; set; } = "https://api.day.app";
     // Legacy JSON field retained only so older settings files can be migrated to
@@ -34,4 +36,23 @@ public sealed class RelaySettings
     public bool RelayManuallyStopped { get; set; }
 
     public bool StartWithWindows { get; set; }
+
+    public string GetHttpEndpointApproval(string mode, string endpoint)
+    {
+        HttpEndpointApprovals ??= new();
+        return HttpEndpointApprovals.TryGetValue(mode.ToLowerInvariant(), out var approved) &&
+               EndpointTransportPolicy.IsApproved(endpoint, approved) ? approved : string.Empty;
+    }
+
+    public void SetHttpEndpointApproval(string mode, string endpoint, bool allow)
+    {
+        HttpEndpointApprovals ??= new();
+        var key = mode.ToLowerInvariant();
+        if (allow && EndpointTransportPolicy.RequiresHttpApproval(endpoint))
+            HttpEndpointApprovals[key] = EndpointTransportPolicy.CanonicalizeEndpoint(endpoint);
+        else
+            HttpEndpointApprovals.Remove(key);
+    }
+
+    public void RevokeHttpEndpointApproval(string mode) => SetHttpEndpointApproval(mode, string.Empty, false);
 }

@@ -19,6 +19,7 @@ public sealed class DeliveryQueue : IAsyncDisposable
     private readonly Channel<bool> _wake = Channel.CreateUnbounded<bool>();
     private readonly object _gate = new();
     private CancellationTokenSource _shutdown = new();
+    private CancellationTokenSource _targetChanged = new();
     private readonly SemaphoreSlim _fileLock = new(1, 1);
     private readonly List<PendingDelivery> _items = new();
     private readonly List<DeadLetterDelivery> _deadLetters = new();
@@ -31,7 +32,19 @@ public sealed class DeliveryQueue : IAsyncDisposable
 
     public void Configure(RelayDeliveryTarget target)
     {
-        _target = target;
+        CancellationTokenSource previousTarget;
+        lock (_gate)
+        {
+            if (_target == target) return;
+            _target = target;
+            previousTarget = _targetChanged;
+            _targetChanged = new CancellationTokenSource();
+        }
+        // Cancel even an attempt that has already captured the previous approval
+        // but is still preparing its request or waiting for a connection.
+        previousTarget.Cancel();
+        previousTarget.Dispose();
+        Signal();
     }
 
     public async Task StartAsync()
@@ -84,6 +97,7 @@ public sealed class DeliveryQueue : IAsyncDisposable
     {
         await StopAsync();
         _shutdown.Dispose();
+        _targetChanged.Dispose();
         _fileLock.Dispose();
     }
 
@@ -91,6 +105,13 @@ public sealed class DeliveryQueue : IAsyncDisposable
     {
         while (!cancellationToken.IsCancellationRequested)
         {
+            // Editing an address or revoking HTTP consent must pause pending
+            // deliveries, not turn them into permanent failures while setup is incomplete.
+            if (!WebhookClient.IsValidConfiguration(_target))
+            {
+                await WaitForSignalAsync(null, cancellationToken);
+                continue;
+            }
             var due = GetDueItems(DateTimeOffset.UtcNow);
             if (due.Count == 0)
             {
@@ -101,7 +122,28 @@ public sealed class DeliveryQueue : IAsyncDisposable
             foreach (var item in due)
             {
                 if (cancellationToken.IsCancellationRequested) break;
-                var result = await _client.DeliverAsync(_target, item.Payload, cancellationToken);
+                RelayDeliveryTarget target;
+                CancellationTokenSource attemptCancellation;
+                lock (_gate)
+                {
+                    target = _target;
+                    if (!WebhookClient.IsValidConfiguration(target)) break;
+                    attemptCancellation = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken, _targetChanged.Token);
+                }
+                DeliveryResult result;
+                using (attemptCancellation)
+                {
+                    try
+                    {
+                        result = await _client.DeliverAsync(target, item.Payload, attemptCancellation.Token);
+                    }
+                    catch (OperationCanceledException) when (!cancellationToken.IsCancellationRequested && attemptCancellation.IsCancellationRequested)
+                    {
+                        // A changed endpoint/approval isn't a failed delivery attempt.
+                        // Leave it in the queue and reevaluate the latest configuration.
+                        break;
+                    }
+                }
                 var outcome = ApplyResult(item.DeliveryId, result);
                 await SaveAsync();
                 OutcomeReceived?.Invoke(this, outcome);

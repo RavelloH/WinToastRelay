@@ -135,6 +135,17 @@
                                         <Expander HorizontalAlignment="Stretch" HorizontalContentAlignment="Stretch" Background="{ThemeResource CardBackgroundFillColorDefaultBrush}" CornerRadius="4"><Expander.Header><StackPanel Spacing="5" Margin="0,4"><TextBlock Text="{x:Bind ViewModel.WebhookUrlLabel, Mode=OneWay}"/><TextBlock Text="{x:Bind ViewModel.WebhookUrl, Mode=OneWay}" Opacity="0.62" FontSize="13"/></StackPanel></Expander.Header><TextBox PlaceholderText="{x:Bind ViewModel.WebhookUrlPlaceholder, Mode=OneWay}" Text="{x:Bind ViewModel.WebhookUrl, Mode=TwoWay, UpdateSourceTrigger=PropertyChanged}"/></Expander>
                                         <Expander HorizontalAlignment="Stretch" HorizontalContentAlignment="Stretch" Background="{ThemeResource CardBackgroundFillColorDefaultBrush}" CornerRadius="4"><Expander.Header><StackPanel Spacing="5" Margin="0,4"><TextBlock Text="{x:Bind ViewModel.BearerTokenLabel, Mode=OneWay}"/><TextBlock Text="••••••••" Opacity="0.62" FontSize="13"/></StackPanel></Expander.Header><StackPanel Spacing="8"><PasswordBox x:Name="BearerTokenBox" PasswordChanged="BearerTokenBox_PasswordChanged"/><TextBlock Text="{x:Bind ViewModel.BearerTokenDescription, Mode=OneWay}" Opacity="0.62" TextWrapping="Wrap"/></StackPanel></Expander>
                                     </StackPanel>
+                                    <Border Background="{ThemeResource CardBackgroundFillColorDefaultBrush}" CornerRadius="4" Padding="18,16">
+                                        <Grid ColumnSpacing="12">
+                                            <Grid.ColumnDefinitions><ColumnDefinition Width="*"/><ColumnDefinition Width="48"/></Grid.ColumnDefinitions>
+                                            <StackPanel Spacing="5">
+                                                <TextBlock Text="{x:Bind ViewModel.HttpApprovalLabel, Mode=OneWay}" Style="{StaticResource BodyStrongTextBlockStyle}"/>
+                                                <TextBlock Text="{x:Bind ViewModel.HttpApprovalDescription, Mode=OneWay}" Opacity="0.72" TextWrapping="Wrap"/>
+                                                <TextBlock Text="{x:Bind ViewModel.HttpApprovalTransportHint, Mode=OneWay}" Opacity="0.58" TextWrapping="Wrap"/>
+                                            </StackPanel>
+                                            <ToggleSwitch Grid.Column="1" Width="48" MinWidth="0" MaxWidth="48" IsOn="{x:Bind ViewModel.AllowUnencryptedHttp, Mode=TwoWay}" IsEnabled="{x:Bind ViewModel.IsHttpApprovalToggleEnabled, Mode=OneWay}" OnContent="" OffContent="" HorizontalAlignment="Right" HorizontalContentAlignment="Right" Margin="0" VerticalAlignment="Center"/>
+                                        </Grid>
+                                    </Border>
                                     <StackPanel Orientation="Horizontal" Spacing="10" Margin="0,6,0,0">
                                         <Button Content="{x:Bind ViewModel.SaveLabel, Mode=OneWay}" Command="{x:Bind ViewModel.SaveSettingsCommand}" Background="{ThemeResource AccentFillColorDefaultBrush}" Foreground="{ThemeResource TextOnAccentFillColorPrimaryBrush}" />
                                         <Button Content="{x:Bind ViewModel.TestLabel, Mode=OneWay}" Command="{x:Bind ViewModel.TestWebhookCommand}" />

@@ -22,6 +22,7 @@ public partial class MainPageViewModel : ObservableObject
     private bool _activityLoaded;
     private bool _applicationsLoaded;
     private string _statusSource = "尚未启动监听";
+    private bool _isRefreshingHttpApprovalToggle;
 
     [ObservableProperty] public partial string WebhookUrl { get; set; } = string.Empty;
     [ObservableProperty] public partial string BearerToken { get; set; } = string.Empty;
@@ -59,6 +60,7 @@ public partial class MainPageViewModel : ObservableObject
     [ObservableProperty] public partial bool StartWithWindows { get; set; }
     [ObservableProperty] public partial bool IsDestinationConfigured { get; set; }
     [ObservableProperty] public partial bool RelayManuallyStopped { get; set; }
+    [ObservableProperty] public partial bool AllowUnencryptedHttp { get; set; }
 
     private ObservableCollection<ActivityEntry> _activity = new();
     public ObservableCollection<ActivityEntry> Activity
@@ -108,11 +110,13 @@ public partial class MainPageViewModel : ObservableObject
     public string SettingsLabel => IsChinese ? "设置" : "Settings";
     public string OverviewTitle => IsChinese ? "把通知送到你需要的地方" : "Send notifications where they belong";
     public string OverviewDescription => string.Empty;
-    public string RunningLabel => IsRelayRunning
-        ? (IsChinese ? "正常转发中" : "Relaying normally")
-        : IsDestinationConfigured && RelayManuallyStopped
-            ? (IsChinese ? "已停止" : "Stopped")
-            : (IsChinese ? "等待配置和权限" : "Waiting for setup and permission");
+    public string RunningLabel => !IsDestinationConfigured
+        ? (IsChinese ? "等待配置和权限" : "Waiting for setup and permission")
+        : IsRelayRunning
+            ? (IsChinese ? "正常转发中" : "Relaying normally")
+            : RelayManuallyStopped
+                ? (IsChinese ? "已停止" : "Stopped")
+                : (IsChinese ? "等待配置和权限" : "Waiting for setup and permission");
     public string StartRelayLabel => IsChinese ? "自动启动" : "Starts automatically";
     public string SetupCardTitle => IsChinese ? "先连接你的通知通道" : "Connect a notification destination";
     public string SetupCardDescription => IsChinese ? "默认使用 Bark，也支持 WxPusher、飞书、Telegram、Discord 和通用 JSON Webhook。" : "Bark is the default; WxPusher, Feishu, Telegram, Discord, and generic JSON webhooks are also supported.";
@@ -188,6 +192,14 @@ public partial class MainPageViewModel : ObservableObject
     public string BearerTokenDescription => IsChinese ? "令牌保存于 Windows 凭据管理器，不写入配置文件。" : "Stored in Windows Credential Manager, never in the settings file.";
     public string SaveLabel => IsChinese ? "保存设置" : "Save settings";
     public string TestLabel => IsChinese ? "发送测试" : "Send test";
+    public string HttpApprovalLabel => IsChinese ? "允许未加密 HTTP" : "Allow unencrypted HTTP";
+    public string HttpApprovalDescription => IsChinese
+        ? $"启用后，通知内容和凭据会以明文传输。仅对可信地址启用；授权仅适用于当前通道和地址：{GetCurrentChannelLabel()} · {GetCurrentEndpoint()}"
+        : $"When enabled, notification content and credentials are sent in plaintext. Enable only for trusted destinations; this permission applies only to the current channel and address: {GetCurrentChannelLabel()} · {GetCurrentEndpoint()}";
+    public string HttpApprovalTransportHint => IsChinese
+        ? "仅对有效的非回环 HTTP 地址生效。HTTPS 或本机回环地址无需此权限。"
+        : "Enabled only for valid non-loopback HTTP URLs. HTTPS and loopback destinations do not need this permission.";
+    public bool IsHttpApprovalToggleEnabled => EndpointTransportPolicy.RequiresHttpApproval(GetCurrentEndpoint());
     public string FiltersTitle => IsChinese ? "应用筛选" : "Application filters";
     public string FiltersDescription => IsChinese ? "通知中心中出现过的应用会列在这里。默认转发，关闭开关即可排除该应用。" : "Apps that have appeared in Notification Center show up here. They are relayed by default; turn one off to exclude it.";
     public string RefreshApplicationsLabel => IsChinese ? "刷新应用列表" : "Refresh app list";
@@ -239,7 +251,11 @@ public partial class MainPageViewModel : ObservableObject
         OnPropertyChanged(nameof(SettingsVisibility));
     }
 
-    partial void OnIsDestinationConfiguredChanged(bool value) => OnPropertyChanged(nameof(SetupCardVisibility));
+    partial void OnIsDestinationConfiguredChanged(bool value)
+    {
+        OnPropertyChanged(nameof(SetupCardVisibility));
+        OnPropertyChanged(nameof(RunningLabel));
+    }
 
     partial void OnDeliveryModeChanged(string value)
     {
@@ -249,7 +265,34 @@ public partial class MainPageViewModel : ObservableObject
         OnPropertyChanged(nameof(FeishuVisibility));
         OnPropertyChanged(nameof(TelegramVisibility));
         OnPropertyChanged(nameof(DiscordVisibility));
+        UpdateHttpApprovalUi();
+        if (_initialized) RefreshHttpApprovalToggle();
     }
+
+    partial void OnAllowUnencryptedHttpChanged(bool value)
+    {
+        if (_isRefreshingHttpApprovalToggle || !_initialized) return;
+
+        var mode = NormalizeDeliveryMode(DeliveryMode);
+        var endpoint = GetCurrentEndpoint();
+        if (value && !EndpointTransportPolicy.RequiresHttpApproval(endpoint))
+        {
+            RefreshHttpApprovalToggle();
+            return;
+        }
+
+        _settings.SetHttpEndpointApproval(mode, endpoint, value);
+        // Update the target synchronously so queued deliveries use the new policy on future attempts.
+        // Requests that have already been sent cannot be recalled.
+        RefreshDestinationAfterPolicyChange();
+        _ = PersistHttpApprovalChangeAsync(value);
+    }
+
+    partial void OnWebhookUrlChanged(string value) => HandleEndpointChanged(RelayDeliveryTarget.JsonWebhookMode);
+    partial void OnBarkServerUrlChanged(string value) => HandleEndpointChanged(RelayDeliveryTarget.BarkMode);
+    partial void OnFeishuWebhookUrlChanged(string value) => HandleEndpointChanged(RelayDeliveryTarget.FeishuMode);
+    partial void OnTelegramApiUrlChanged(string value) => HandleEndpointChanged(RelayDeliveryTarget.TelegramMode);
+    partial void OnDiscordWebhookUrlChanged(string value) => HandleEndpointChanged(RelayDeliveryTarget.DiscordMode);
 
     partial void OnIsRelayRunningChanged(bool value) => OnPropertyChanged(nameof(RunningLabel));
     partial void OnRelayManuallyStoppedChanged(bool value) => OnPropertyChanged(nameof(RunningLabel));
@@ -343,6 +386,7 @@ public partial class MainPageViewModel : ObservableObject
         IsDestinationConfigured = WebhookClient.IsValidConfiguration(CreateTarget());
 
         _initialized = true;
+        RefreshHttpApprovalToggle();
         // History, notification enumeration, permission checks, and icon loading can all
         // involve storage or WinRT calls. Defer them until the first frame is rendered so
         // launching the app remains responsive.
@@ -378,11 +422,17 @@ public partial class MainPageViewModel : ObservableObject
             IsBusy = true;
             try
             {
-                if (!WebhookClient.IsValidConfiguration(CreateTarget()))
+                var target = CreateTarget();
+                if (!WebhookClient.IsValidConfiguration(target))
                 {
+                    if (_relayService.IsRunning) await _relayService.StopAsync();
                     IsRelayRunning = false;
                     IsDestinationConfigured = false;
-                    SetStatus(IsChinese ? "请先完成通知通道配置，保存后将自动开始监听" : "Complete the destination configuration; listening starts automatically after saving");
+                    _settings.RelayEnabled = false;
+                    var configurationError = WebhookClient.GetConfigurationError(target);
+                    SetStatus(configurationError == EndpointTransportPolicy.HttpApprovalRequired
+                        ? configurationError
+                        : IsChinese ? "请先完成通知通道配置，保存后将自动开始监听" : "Complete the destination configuration; listening starts automatically after saving");
                     return;
                 }
 
@@ -419,6 +469,7 @@ public partial class MainPageViewModel : ObservableObject
     {
         await SaveConfigurationAsync();
         await StartRelayAutomaticallyAsync();
+        if (WebhookClient.GetConfigurationError(CreateTarget()) == EndpointTransportPolicy.HttpApprovalRequired) return;
         SetStatus(IsChinese ? "设置已保存" : "Settings saved");
     }
 
@@ -429,13 +480,14 @@ public partial class MainPageViewModel : ObservableObject
         _relayService.Configure(CreateTarget(), AllowedApplications, _settings.ApplicationFilterEnabled);
         IsDestinationConfigured = WebhookClient.IsValidConfiguration(CreateTarget());
         var result = await _relayService.SendTestAsync();
+        var resultDetail = LocalizeStatus(result.Detail);
         SetStatus(result.Succeeded ? (IsChinese ? "测试发送成功" : "Test delivered") : result.Detail);
         AddActivity(new ActivityEntry(
             DateTimeOffset.Now,
             "WinToastRelay",
             IsChinese ? "测试发送" : "Test delivery",
             result.Succeeded,
-            result.Detail) { Body = IsChinese ? "你的通知通道连接正常。" : "Your notification destination is working." });
+            resultDetail) { Body = IsChinese ? "你的通知通道连接正常。" : "Your notification destination is working." });
     }
 
     [RelayCommand]
@@ -526,7 +578,110 @@ public partial class MainPageViewModel : ObservableObject
         DiscordWebhookUrl: DiscordWebhookUrl.Trim(),
         DiscordUsername: DiscordUsername.Trim(),
         DiscordTitleTemplate: DiscordTitleTemplate,
-        DiscordBodyTemplate: DiscordBodyTemplate);
+        DiscordBodyTemplate: DiscordBodyTemplate,
+        ApprovedHttpEndpoint: _settings.GetHttpEndpointApproval(DeliveryMode, GetCurrentEndpoint()));
+
+    private string GetCurrentEndpoint() => NormalizeDeliveryMode(DeliveryMode) switch
+    {
+        RelayDeliveryTarget.JsonWebhookMode => WebhookUrl,
+        RelayDeliveryTarget.WxPusherMode => "https://wxpusher.zjiecode.com/api/send/message",
+        RelayDeliveryTarget.FeishuMode => FeishuWebhookUrl,
+        RelayDeliveryTarget.TelegramMode => TelegramApiUrl,
+        RelayDeliveryTarget.DiscordMode => DiscordWebhookUrl,
+        _ => BarkServerUrl
+    };
+
+    private string GetCurrentChannelLabel() => NormalizeDeliveryMode(DeliveryMode) switch
+    {
+        RelayDeliveryTarget.JsonWebhookMode => JsonWebhookModeLabel,
+        RelayDeliveryTarget.WxPusherMode => WxPusherModeLabel,
+        RelayDeliveryTarget.FeishuMode => FeishuModeLabel,
+        RelayDeliveryTarget.TelegramMode => TelegramModeLabel,
+        RelayDeliveryTarget.DiscordMode => DiscordModeLabel,
+        _ => BarkModeLabel
+    };
+
+    private void UpdateHttpApprovalUi()
+    {
+        OnPropertyChanged(nameof(IsHttpApprovalToggleEnabled));
+        OnPropertyChanged(nameof(HttpApprovalDescription));
+        OnPropertyChanged(nameof(HttpApprovalTransportHint));
+    }
+
+    private void RefreshHttpApprovalToggle()
+    {
+        _isRefreshingHttpApprovalToggle = true;
+        try
+        {
+            AllowUnencryptedHttp = !string.IsNullOrEmpty(_settings.GetHttpEndpointApproval(DeliveryMode, GetCurrentEndpoint()));
+        }
+        finally
+        {
+            _isRefreshingHttpApprovalToggle = false;
+        }
+        UpdateHttpApprovalUi();
+    }
+
+    private void HandleEndpointChanged(string mode)
+    {
+        UpdateHttpApprovalUi();
+        if (!_initialized) return;
+
+        var hadApproval = _settings.HttpEndpointApprovals?.ContainsKey(mode) == true;
+        _settings.RevokeHttpEndpointApproval(mode);
+        if (string.Equals(NormalizeDeliveryMode(DeliveryMode), mode, StringComparison.OrdinalIgnoreCase))
+            RefreshHttpApprovalToggle();
+
+        if (!hadApproval) return;
+
+        RefreshDestinationAfterPolicyChange();
+        _ = PersistRevokedHttpApprovalAsync();
+    }
+
+    private void RefreshDestinationAfterPolicyChange()
+    {
+        var target = CreateTarget();
+        _relayService.Configure(target, AllowedApplications, _settings.ApplicationFilterEnabled);
+        IsDestinationConfigured = WebhookClient.IsValidConfiguration(target);
+        if (WebhookClient.GetConfigurationError(target) == EndpointTransportPolicy.HttpApprovalRequired)
+            SetStatus(EndpointTransportPolicy.HttpApprovalRequired);
+    }
+
+    private async Task PersistHttpApprovalChangeAsync(bool isAllowed)
+    {
+        try
+        {
+            await SaveConfigurationAsync();
+        }
+        catch (Exception ex)
+        {
+            SetStatus(IsChinese ? $"保存 HTTP 授权失败：{ex.Message}" : $"Failed to save HTTP approval: {ex.Message}");
+            if (isAllowed) return;
+        }
+        await RecheckRelayAfterHttpPolicyChangeAsync();
+    }
+
+    private async Task PersistRevokedHttpApprovalAsync()
+    {
+        try
+        {
+            await _settingsStore.SaveAsync(_settings);
+        }
+        catch (Exception ex)
+        {
+            SetStatus(IsChinese ? $"保存 HTTP 授权撤销失败：{ex.Message}" : $"Failed to save HTTP approval revocation: {ex.Message}");
+        }
+        await RecheckRelayAfterHttpPolicyChangeAsync();
+    }
+
+    private async Task RecheckRelayAfterHttpPolicyChangeAsync()
+    {
+        try { await StartRelayAutomaticallyAsync(); }
+        catch (Exception ex)
+        {
+            SetStatus(IsChinese ? $"更新 HTTP 转发状态失败：{ex.Message}" : $"Failed to update HTTP relay state: {ex.Message}");
+        }
+    }
 
     private static string NormalizeDeliveryMode(string deliveryMode)
     {
@@ -643,6 +798,13 @@ public partial class MainPageViewModel : ObservableObject
 
     private string LocalizeStatus(string status) => status switch
     {
+        EndpointTransportPolicy.HttpApprovalRequired => IsChinese ? "请为此地址启用“允许未加密 HTTP”" : "Enable Allow unencrypted HTTP for this destination",
+        "请为此地址启用“允许未加密 HTTP”" or "Enable Allow unencrypted HTTP for this destination" =>
+            IsChinese ? "请为此地址启用“允许未加密 HTTP”" : "Enable Allow unencrypted HTTP for this destination",
+        "目标服务器重定向已阻止，请将地址改为最终目的地。" or "The server redirect was blocked. Set the URL to the final destination." =>
+            IsChinese ? "目标服务器重定向已阻止，请将地址改为最终目的地。" : "The server redirect was blocked. Set the URL to the final destination.",
+        _ when status.StartsWith("HTTP ", StringComparison.Ordinal) && status.EndsWith(": Redirect blocked; configure the final destination URL", StringComparison.Ordinal) =>
+            IsChinese ? "目标服务器重定向已阻止，请将地址改为最终目的地。" : "The server redirect was blocked. Set the URL to the final destination.",
         "尚未启动监听" or "Not listening yet" => IsChinese ? "尚未启动监听" : "Not listening yet",
         "Listening for Windows notifications" or "正在监听 Windows 通知" => IsChinese ? "正在监听 Windows 通知" : "Listening for Windows notifications",
         "Relay paused" or "转发已暂停" => IsChinese ? "转发已暂停" : "Relay paused",

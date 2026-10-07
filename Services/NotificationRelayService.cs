@@ -73,14 +73,9 @@ public sealed class NotificationRelayService
     {
         if (_isRunning) return new DeliveryResult(true, "Already running");
 
-        if (!WebhookClient.IsValidConfiguration(_target))
-            return new DeliveryResult(false, _target.IsBark
-                ? "Invalid Bark configuration"
-                : _target.IsWxPusher ? "Invalid WxPusher configuration"
-                : _target.IsFeishu ? "Invalid Feishu configuration"
-                : _target.IsTelegram ? "Invalid Telegram configuration"
-                : _target.IsDiscord ? "Invalid Discord configuration"
-                : "Invalid webhook URL");
+        var configurationError = WebhookClient.GetConfigurationError(_target);
+        if (!string.IsNullOrEmpty(configurationError))
+            return new DeliveryResult(false, configurationError);
 
         var access = await _listener.RequestAccessAsync();
         if (access != UserNotificationListenerAccessStatus.Allowed)

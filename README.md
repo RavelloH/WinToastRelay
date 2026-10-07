@@ -27,7 +27,7 @@ WinToastRelay uses `Windows.UI.Notifications.Management.UserNotificationListener
 * Bark delivery is the default, using JSON POST with configurable templates and arbitrary Bark parameters.
 * WxPusher standard push supports UID and Topic recipients with configurable summary and content templates.
 * Feishu custom bot, Telegram Bot API, and Discord Webhook delivery are supported with configurable templates.
-* HTTPS JSON webhook delivery remains available with an optional Bearer token (loopback HTTP is allowed for local development).
+* JSON webhook delivery supports an optional Bearer token. HTTPS is the default; loopback HTTP remains allowed, and other HTTP endpoints require explicit approval for the current channel and URL.
 * Delivery credentials, including the Bark device key, WxPusher AppToken, Feishu signing secret, Telegram Bot token, and webhook Bearer token, are stored in Windows Credential Manager, not in the JSON settings file.
 * Application allow-list filtering.
 * Delivery activity history with status and HTTP response details.
@@ -83,6 +83,12 @@ For local sideloading, run the generated `Add-AppDevPackage.ps1` from the packag
 Use the `.msix` and `.cer` from the same output directory. If Windows reports `0x800B0109` or `0x87e80034` during local sideloading, import the matching `.cer` into **Local Computer → Trusted People**, then install the corresponding `.msix`.
 
 ## Delivery modes
+
+### HTTP and self-hosted destinations
+
+For a trusted HTTP service such as `http://192.168.1.50:8123/api/webhook/test_relay` or `http://homeassistant.local:8123/api/webhook/test_relay`, enter the endpoint in **Destination**, enable **Allow unencrypted HTTP**, then save or send a test. IPv4, IPv6, hostnames, and custom ports are supported without a private-address allow-list or DNS probing. The switch grants permission only for that channel's exact configured URL; changing the URL revokes approval, and switching channels does not transfer permission. HTTPS and loopback HTTP do not require this switch.
+
+HTTP sends notification content and credentials without encryption. Use it only with trusted endpoints and networks; HTTPS certificate validation remains enabled. Test delivery and queued background delivery enforce the same policy. Delivery POST requests do not follow redirects automatically: configure the final destination URL instead, and approve it separately if it uses HTTP.
 
 ### Bark (default)
 

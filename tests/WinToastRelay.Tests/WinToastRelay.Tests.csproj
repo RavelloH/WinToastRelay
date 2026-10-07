@@ -21,6 +21,7 @@
   <ItemGroup>
     <Compile Include="..\..\Models\WebhookPayload.cs" Link="Models\WebhookPayload.cs" />
     <Compile Include="..\..\Models\RelayDeliveryTarget.cs" Link="Models\RelayDeliveryTarget.cs" />
+    <Compile Include="..\..\Models\EndpointTransportPolicy.cs" Link="Models\EndpointTransportPolicy.cs" />
     <Compile Include="..\..\Models\AppJsonContext.cs" Link="Models\AppJsonContext.cs" />
     <Compile Include="..\..\Models\RelaySettings.cs" Link="Models\RelaySettings.cs" />
     <Compile Include="..\..\Models\DeliveryStorageModels.cs" Link="Models\DeliveryStorageModels.cs" />

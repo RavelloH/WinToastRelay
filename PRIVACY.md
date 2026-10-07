@@ -1,6 +1,6 @@
 # WinToastRelay Privacy Policy
 
-**Effective date:** August 26, 2026
+**Effective date:** October 7, 2026
 
 WinToastRelay is an open-source Windows application maintained by RavelloH. It listens for Windows notifications on the local device and forwards selected notifications to a destination configured by the user.
 
@@ -35,7 +35,9 @@ The application does not execute user-provided code or access user-selected file
 
 ## Security
 
-Delivery requests use the URL and transport configured by the user. HTTPS is required except for HTTP loopback endpoints, which are allowed for local development and testing. A configured Bark server, WxPusher service, Feishu bot, Telegram bot, Discord webhook, or JSON webhook endpoint should be treated as a trusted recipient because notification content is sent to it directly.
+Delivery requests use the URL and transport configured by the user. HTTPS is required by default, except for HTTP loopback endpoints used for local development and testing. You may explicitly enable unencrypted HTTP for the current delivery channel and exact destination URL, including a local network or self-hosted service. Changing that channel's destination URL revokes its HTTP approval; other channels do not inherit it. HTTP does not encrypt notification content or credentials in transit and should only be used with trusted endpoints and networks. HTTPS certificate validation is not bypassed.
+
+Delivery POST requests do not automatically follow redirects. If an endpoint responds with a redirect, configure its final URL and, if applicable, approve HTTP for that URL before retrying. A configured Bark server, WxPusher service, Feishu bot, Telegram bot, Discord webhook, or JSON webhook endpoint should be treated as a trusted recipient because notification content is sent to it directly.
 
 ## Children's privacy
 
